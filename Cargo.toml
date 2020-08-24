@@ -1,0 +1,10 @@
+[package]
+name = "frost"
+version = "0.1.0"
+authors = ["Chelsea Komlo <ckomlo@uwaterloo.ca>"]
+
+[dependencies]
+
+curve25519-dalek = "1.0.0"
+rand = "0.6"
+sha2 = "0.9"
