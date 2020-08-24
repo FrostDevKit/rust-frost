@@ -1,5 +1,5 @@
-use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-use curve25519_dalek::edwards::EdwardsPoint;
+use curve25519_dalek::constants;
+use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 
@@ -51,9 +51,9 @@ pub fn generate_shares(
         });
     }
 
-    commitment.push(ED25519_BASEPOINT_POINT * secret);
+    commitment.push(&constants::RISTRETTO_BASEPOINT_TABLE * &secret);
     for c in coefficients {
-        commitment.push(ED25519_BASEPOINT_POINT * c);
+        commitment.push(&constants::RISTRETTO_BASEPOINT_TABLE * &c);
     }
 
     Ok((commitment, shares))
@@ -61,12 +61,12 @@ pub fn generate_shares(
 
 /// Verify that a share is consistent with a commitment.
 pub fn verify_share(share: &Share, commitment: &KeyGenCommitment) -> Result<bool, &'static str> {
-    let f_result = ED25519_BASEPOINT_POINT * share.value;
+    let f_result = &constants::RISTRETTO_BASEPOINT_TABLE * &share.value;
 
     let x = Scalar::from(share.index as u32);
 
     let (_, result) = commitment.iter().fold(
-        (Scalar::one(), EdwardsPoint::identity()),
+        (Scalar::one(), RistrettoPoint::identity()),
         |(x_to_the_i, sum_so_far), comm_i| (x_to_the_i * x, sum_so_far + x_to_the_i * comm_i),
     );
 

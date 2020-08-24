@@ -1,5 +1,5 @@
-use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-use curve25519_dalek::edwards::EdwardsPoint;
+use curve25519_dalek::constants;
+use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::ThreadRng;
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ pub fn keygen_with_dealer(
     numshares: usize,
     threshold: usize,
     rng: &mut ThreadRng,
-) -> Result<(KeyGenCommitment, HashMap<u32, KeyPair>, EdwardsPoint), &'static str> {
+) -> Result<(KeyGenCommitment, HashMap<u32, KeyPair>, RistrettoPoint), &'static str> {
     let secret = Scalar::random(rng);
 
     let res = generate_shares(secret, numshares, threshold, rng);
@@ -24,7 +24,7 @@ pub fn keygen_with_dealer(
     let (com, shares) = res.unwrap();
     for index in 0..shares.len() {
         let share = shares[index];
-        let public_key = ED25519_BASEPOINT_POINT * share.value;
+        let public_key = &constants::RISTRETTO_BASEPOINT_TABLE * &share.value;
         keypairs.insert(
             share.index as u32,
             KeyPair {
@@ -35,7 +35,7 @@ pub fn keygen_with_dealer(
         );
     }
 
-    let group_pub_key = ED25519_BASEPOINT_POINT * secret; // TODO this will change with the DKG
+    let group_pub_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret; // TODO this will change with the DKG
 
     Ok((com, keypairs, group_pub_key))
 }

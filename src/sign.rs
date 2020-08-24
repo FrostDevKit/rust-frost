@@ -1,5 +1,5 @@
-use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-use curve25519_dalek::edwards::EdwardsPoint;
+use curve25519_dalek::constants;
+use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 use rand::rngs::ThreadRng;
@@ -46,11 +46,11 @@ pub fn preprocess(
         nonces.push(Nonce {
             d: NonceInstance {
                 secret: d,
-                public: ED25519_BASEPOINT_POINT * d,
+                public: &constants::RISTRETTO_BASEPOINT_TABLE * &d,
             },
             e: NonceInstance {
                 secret: e,
-                public: ED25519_BASEPOINT_POINT * e,
+                public: &constants::RISTRETTO_BASEPOINT_TABLE * &e,
             },
             is_dirty: false,
         });
@@ -85,7 +85,7 @@ fn gen_rho_i(index: usize, msg: &str, signing_package: &SigningPackage) -> Scala
     Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
 }
 
-fn gen_group_commitment(msg: &str, signing_package: &SigningPackage) -> EdwardsPoint {
+fn gen_group_commitment(msg: &str, signing_package: &SigningPackage) -> RistrettoPoint {
     signing_package
         .items
         .iter()
@@ -93,10 +93,10 @@ fn gen_group_commitment(msg: &str, signing_package: &SigningPackage) -> EdwardsP
             item.commitment.d_comm
                 + (item.commitment.e_comm) * gen_rho_i(item.index, msg, signing_package)
         })
-        .fold(EdwardsPoint::identity(), |acc, x| acc + x)
+        .fold(RistrettoPoint::identity(), |acc, x| acc + x)
 }
 
-fn gen_c(msg: &str, group_commitment: EdwardsPoint) -> Scalar {
+fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
     let mut hasher = Sha256::new();
     hasher.update(msg);
     hasher.update(group_commitment.compress().to_bytes());
@@ -168,7 +168,7 @@ pub fn sign(
 /// TODO add in validation of signatures
 pub fn aggregate(
     signing_responses: &Vec<SigningResponse>,
-    group_commitment: EdwardsPoint, // TODO validate responses
+    group_commitment: RistrettoPoint, // TODO validate responses
 ) -> Result<Signature, &'static str> {
     let resp = signing_responses
         .iter()
@@ -182,10 +182,10 @@ pub fn aggregate(
 }
 
 /// validate instantiates a plain Schnorr validation operation
-pub fn validate(msg: &str, sig: Signature, pubkey: EdwardsPoint) -> bool {
+pub fn validate(msg: &str, sig: Signature, pubkey: RistrettoPoint) -> bool {
     let c = gen_c(msg, sig.r);
 
-    sig.r == (ED25519_BASEPOINT_POINT * sig.z) - (pubkey * c)
+    sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * c)
 }
 
 #[cfg(test)]
@@ -278,11 +278,11 @@ mod tests {
     #[test]
     fn valid_validate_single_party() {
         let privkey = Secret::from(42u32);
-        let pubkey = ED25519_BASEPOINT_POINT * privkey;
+        let pubkey = &constants::RISTRETTO_BASEPOINT_TABLE * &privkey;
 
         let msg = "testing sign";
         let nonce = Scalar::from(5u32); // random nonce
-        let commitment = ED25519_BASEPOINT_POINT * nonce;
+        let commitment = &constants::RISTRETTO_BASEPOINT_TABLE * &nonce;
         let c = gen_c(msg, commitment);
 
         let z = nonce + privkey * c;
@@ -298,11 +298,11 @@ mod tests {
     #[test]
     fn invalid_validate_single_party() {
         let privkey = Secret::from(42u32);
-        let pubkey = ED25519_BASEPOINT_POINT * privkey;
+        let pubkey = &constants::RISTRETTO_BASEPOINT_TABLE * &privkey;
 
         let msg = "testing sign";
         let nonce = Scalar::from(5u32); // random nonce
-        let commitment = ED25519_BASEPOINT_POINT * nonce;
+        let commitment = &constants::RISTRETTO_BASEPOINT_TABLE * &nonce;
         let c = gen_c(msg, commitment);
 
         let invalid_nonce = Scalar::from(100u32); // random nonce

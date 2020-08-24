@@ -1,9 +1,9 @@
-use curve25519_dalek::edwards::EdwardsPoint;
+use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 
 pub type Secret = Scalar;
-pub type KeyGenCommitment = Vec<EdwardsPoint>;
-pub type GroupSigningCommitment = EdwardsPoint;
+pub type KeyGenCommitment = Vec<RistrettoPoint>;
+pub type GroupSigningCommitment = RistrettoPoint;
 
 #[derive(Clone)]
 pub struct SigningPackage {
@@ -19,13 +19,13 @@ pub struct SigningItem {
 #[derive(Copy, Clone)]
 pub struct SigningResponse {
     pub response: Scalar,
-    pub signer_pubkey: EdwardsPoint,
+    pub signer_pubkey: RistrettoPoint,
 }
 
 #[derive(Copy, Clone)]
 pub struct SigningCommitment {
-    pub d_comm: EdwardsPoint,
-    pub e_comm: EdwardsPoint,
+    pub d_comm: RistrettoPoint,
+    pub e_comm: RistrettoPoint,
 }
 
 #[derive(Copy, Clone)]
@@ -38,7 +38,7 @@ pub struct Nonce {
 #[derive(Copy, Clone)]
 pub struct NonceInstance {
     pub secret: Scalar,
-    pub public: EdwardsPoint,
+    pub public: RistrettoPoint,
 }
 
 #[derive(Copy, Clone)]
@@ -50,12 +50,12 @@ pub struct Share {
 #[derive(Copy, Clone)]
 pub struct KeyPair {
     pub secret: Scalar,
-    pub public: EdwardsPoint,
+    pub public: RistrettoPoint,
     pub index: usize,
 }
 
 #[derive(Copy, Clone)]
 pub struct Signature {
-    pub r: EdwardsPoint,
+    pub r: RistrettoPoint,
     pub z: Scalar,
 }
