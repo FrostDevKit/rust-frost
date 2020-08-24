@@ -7,18 +7,176 @@ use sha2::{Digest, Sha256};
 use std::convert::TryInto;
 use types::*;
 
-pub fn get_lagrange_coeff(
+/// preprocess is performed by each participant; their commitments are published
+/// and stored in an external location for later use in signing, while their
+/// signing nonces are stored locally.
+pub fn preprocess(
+    number_commitments: usize,
+    participant_index: u32,
+    participant_pubkey: RistrettoPoint,
+    rng: &mut ThreadRng,
+) -> Result<(Vec<SigningCommitment>, Vec<NoncePair>), &'static str> {
+    let mut nonces: Vec<NoncePair> = Vec::with_capacity(number_commitments);
+    let mut commitments = Vec::with_capacity(number_commitments);
+
+    for _ in 0..number_commitments {
+        let d = Scalar::random(rng);
+        let e = Scalar::random(rng);
+
+        let nonce_pair = NoncePair::new(d, e)?;
+        nonces.push(nonce_pair);
+
+        let commitment = SigningCommitment::new(
+            nonce_pair.d.public,
+            nonce_pair.e.public,
+            participant_index,
+            participant_pubkey,
+        )?;
+
+        commitments.push(commitment);
+    }
+
+    Ok((commitments, nonces))
+}
+
+/// sign is performed by each participant selected for the signing
+/// operation; these responses are then aggregated into the final FROST
+/// signature by the signature aggregator performing the aggregate function
+/// with each response.
+pub fn sign(
+    keypair: &KeyPair,
+    signing_commitments: &Vec<SigningCommitment>,
+    signing_nonces: &mut Vec<NoncePair>,
+    msg: &str,
+) -> Result<SigningResponse, &'static str> {
+    let bindings = signing_commitments
+        .iter()
+        .map(|x| gen_rho_i(x.index, msg, signing_commitments))
+        .collect();
+
+    let group_commitment = gen_group_commitment(&signing_commitments, &bindings)?;
+
+    let indices = signing_commitments.iter().map(|item| item.index).collect();
+
+    let lambda_i = get_lagrange_coeff(keypair.index, &indices)?;
+
+    // find the corresponding nonces for this participant
+    let my_comm = match signing_commitments
+        .iter()
+        .find(|item| item.index == keypair.index)
+    {
+        Some(v) => v,
+        None => return Err("No signing commitment for signer"),
+    };
+
+    let signing_nonce = match signing_nonces
+        .iter_mut()
+        .find(|item| item.d.public == my_comm.d && item.e.public == my_comm.e)
+    {
+        Some(v) => v,
+        None => return Err("No matching signing nonce for signer"),
+    };
+
+    // now mark the nonce as having been used, return an error if it is already used
+    match signing_nonce.dirty {
+        false => signing_nonce.mark_as_used(),
+        true => return Err("signing nonce has already been used!"),
+    }
+
+    // TODO before going any further, ensure that each nonce are in G*
+
+    let my_rho_i = match bindings.iter().find(|x| x.index == keypair.index) {
+        Some(x) => x.rho_i,
+        None => return Err("No matching rho_i value for signer"),
+    };
+
+    let c = gen_c(msg, group_commitment);
+
+    let response = signing_nonce.d.secret
+        + (signing_nonce.e.secret * my_rho_i)
+        + (lambda_i * keypair.secret * c);
+
+    Ok(SigningResponse {
+        response: response,
+        index: keypair.index,
+    })
+}
+
+/// aggregate collects all responses from participants. It first performs a
+/// validity check for each participant's response, and will return an error in the
+/// case the response is invalid. If all responses are valid, it aggregates these
+/// into a single signature that is published. This function is executed
+/// by the entity performing the signature aggregator role.
+pub fn aggregate(
+    msg: &str,
+    signing_commitments: &Vec<SigningCommitment>,
+    signing_responses: &Vec<SigningResponse>,
+) -> Result<Signature, &'static str> {
+    let bindings = signing_commitments
+        .iter()
+        .map(|x| gen_rho_i(x.index, msg, signing_commitments))
+        .collect();
+
+    let group_commitment = gen_group_commitment(&signing_commitments, &bindings)?;
+    let c = gen_c(msg, group_commitment);
+
+    // check the validity of each participant's response
+    for resp in signing_responses {
+        let matching_rho_i = match bindings.iter().find(|x| x.index == resp.index) {
+            Some(x) => x.rho_i,
+            None => return Err("No matching rho_i value for signer"),
+        };
+
+        let indices = signing_commitments.iter().map(|item| item.index).collect();
+
+        let lambda_i = get_lagrange_coeff(resp.index, &indices)?;
+
+        let matching_commitment = match signing_commitments.iter().find(|x| x.index == resp.index) {
+            Some(x) => x,
+            None => return Err("No matching commitment for response"),
+        };
+
+        let comm_i = matching_commitment.d + (matching_commitment.e * matching_rho_i);
+        let is_valid = (&constants::RISTRETTO_BASEPOINT_TABLE * &resp.response)
+            == (comm_i + (matching_commitment.signer_pubkey * (c * lambda_i)));
+
+        if !is_valid {
+            return Err("Invalid signer response");
+        }
+    }
+
+    let group_resp = signing_responses
+        .iter()
+        .fold(Scalar::zero(), |acc, x| acc + x.response);
+
+    Ok(Signature {
+        r: group_commitment,
+        z: group_resp,
+    })
+}
+
+/// validate instantiates a plain Schnorr validation operation
+pub fn validate(msg: &str, sig: Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
+    let c = gen_c(msg, sig.r);
+
+    match sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * c) {
+        true => Ok(()),
+        false => Err("Signature is invalid"),
+    }
+}
+
+fn get_lagrange_coeff(
     signer_index: u32,
     all_signer_indices: &Vec<u32>,
 ) -> Result<Scalar, &'static str> {
     let mut num = Scalar::one();
     let mut den = Scalar::one();
-    for j in all_signer_indices.clone() {
-        if j == signer_index {
+    for j in all_signer_indices {
+        if j == &signer_index {
             continue;
         }
-        num *= Scalar::from(j as u32);
-        den *= Scalar::from(j) - Scalar::from(signer_index);
+        num *= Scalar::from(*j);
+        den *= Scalar::from(*j) - Scalar::from(signer_index);
     }
 
     if den == Scalar::zero() {
@@ -30,70 +188,42 @@ pub fn get_lagrange_coeff(
     Ok(lagrange_coeff)
 }
 
-/// preprocess is performed by all participants; their commitments are published
-/// and stored in an external location for later use in signing, while their
-/// signing nonces are stored locally.
-pub fn preprocess(
-    number_commitments: usize,
-    rng: &mut ThreadRng,
-) -> (Vec<SigningCommitment>, Vec<Nonce>) {
-    let mut nonces: Vec<Nonce> = Vec::with_capacity(number_commitments);
-
-    for _ in 0..number_commitments {
-        let d = Scalar::random(rng);
-        let e = Scalar::random(rng);
-
-        nonces.push(Nonce {
-            d: NonceInstance {
-                secret: d,
-                public: &constants::RISTRETTO_BASEPOINT_TABLE * &d,
-            },
-            e: NonceInstance {
-                secret: e,
-                public: &constants::RISTRETTO_BASEPOINT_TABLE * &e,
-            },
-            is_dirty: false,
-        });
-    }
-
-    let commitments: Vec<SigningCommitment> = nonces
-        .iter()
-        .map(|item| SigningCommitment {
-            d_comm: item.d.public,
-            e_comm: item.e.public,
-        })
-        .collect();
-
-    (commitments, nonces)
-}
-
 fn slice_to_array_helper(s: &[u8]) -> [u8; 32] {
     s.try_into().expect("slice with incorrect length")
 }
 
-fn gen_rho_i(index: usize, msg: &str, signing_package: &SigningPackage) -> Scalar {
+fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>) -> BindingValue {
     let mut hasher = Sha256::new();
-    hasher.update(index.to_string().as_bytes());
+    hasher.update("I".as_bytes());
+    hasher.update(index.to_be_bytes());
     hasher.update(msg.as_bytes());
-    for item in &signing_package.items {
-        hasher.update(item.index.to_string().as_bytes());
-        hasher.update(item.commitment.d_comm.compress().as_bytes());
-        hasher.update(item.commitment.e_comm.compress().as_bytes());
+    for item in signing_commitments {
+        hasher.update(item.index.to_be_bytes());
+        hasher.update(item.d.compress().as_bytes());
+        hasher.update(item.e.compress().as_bytes());
     }
     let result = hasher.finalize();
 
-    Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
+    let rho_i = Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()));
+    BindingValue { index, rho_i }
 }
 
-fn gen_group_commitment(msg: &str, signing_package: &SigningPackage) -> RistrettoPoint {
-    signing_package
-        .items
-        .iter()
-        .map(|item| {
-            item.commitment.d_comm
-                + (item.commitment.e_comm) * gen_rho_i(item.index, msg, signing_package)
-        })
-        .fold(RistrettoPoint::identity(), |acc, x| acc + x)
+fn gen_group_commitment(
+    signing_commitments: &Vec<SigningCommitment>,
+    bindings: &Vec<BindingValue>,
+) -> Result<RistrettoPoint, &'static str> {
+    let mut accumulator = RistrettoPoint::identity();
+
+    for commitment in signing_commitments {
+        let rho_i = match bindings.iter().find(|x| x.index == commitment.index) {
+            Some(x) => x.rho_i,
+            None => return Err("No matching rho_i for commitment!"),
+        };
+
+        accumulator += commitment.d + (commitment.e * rho_i)
+    }
+
+    Ok(accumulator)
 }
 
 fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
@@ -102,90 +232,6 @@ fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
     hasher.update(group_commitment.compress().to_bytes());
     let result = hasher.finalize();
     Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
-}
-
-/// sign is performed by all participants selected for the signing operation
-pub fn sign(
-    keypair: &KeyPair,
-    signing_package: &SigningPackage,
-    signing_nonces: &mut Vec<Nonce>,
-    msg: &str,
-) -> Result<SigningResponse, &'static str> {
-    println!("starting signing for participant {}", keypair.index);
-
-    let group_commitment = gen_group_commitment(msg, &signing_package);
-
-    let c = gen_c(msg, group_commitment);
-
-    let signing_indices = signing_package
-        .items
-        .iter()
-        .map(|item| item.index as u32)
-        .collect();
-
-    let lambda_i = match get_lagrange_coeff(keypair.index as u32, &signing_indices) {
-        Ok(v) => v,
-        Err(err) => return Err(err),
-    };
-
-    // find the corresponding nonces for this participant
-    let my_comm = match signing_package
-        .items
-        .iter()
-        .find(|item| item.index == keypair.index)
-    {
-        Some(v) => v.commitment,
-        None => return Err("No signing commitment for signer"),
-    };
-
-    let signing_nonce = match signing_nonces
-        .iter()
-        .find(|item| item.d.public == my_comm.d_comm && item.e.public == my_comm.e_comm)
-    {
-        Some(v) => v,
-        None => return Err("No signing nonce for signer"),
-    };
-
-    if signing_nonce.is_dirty {
-        return Err("Commitment re-use error; aborting");
-    }
-
-    // TODO set the is+dirty bit
-    let rho_i = gen_rho_i(keypair.index, msg, signing_package);
-
-    let response =
-        signing_nonce.d.secret + (signing_nonce.e.secret * rho_i) + (lambda_i * keypair.secret * c);
-
-    Ok(SigningResponse {
-        response: response,
-        signer_pubkey: keypair.public,
-    })
-}
-
-/// aggregate collects all responses from participants and aggregates these
-/// into a single signature that is then published; this function is executed
-/// by the signature aggregator.
-/// TODO add in validation of signatures
-pub fn aggregate(
-    signing_responses: &Vec<SigningResponse>,
-    group_commitment: RistrettoPoint, // TODO validate responses
-) -> Result<Signature, &'static str> {
-    let resp = signing_responses
-        .iter()
-        .map(|x| x.response)
-        .fold(Scalar::zero(), |acc, x| acc + x);
-
-    Ok(Signature {
-        r: group_commitment,
-        z: resp,
-    })
-}
-
-/// validate instantiates a plain Schnorr validation operation
-pub fn validate(msg: &str, sig: Signature, pubkey: RistrettoPoint) -> bool {
-    let c = gen_c(msg, sig.r);
-
-    sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * c)
 }
 
 #[cfg(test)]
@@ -198,86 +244,323 @@ mod tests {
     #[test]
     fn preprocess_generates_values() {
         let mut rng: ThreadRng = rand::thread_rng();
-        let (signing_commitments, signing_nonces) = preprocess(5, &mut rng);
+        let (signing_commitments, signing_nonces) =
+            preprocess(5, 1, RistrettoPoint::identity(), &mut rng).unwrap();
         assert!(signing_commitments.len() == 5);
         assert!(signing_nonces.len() == 5);
-        //
-        // test that the commitments are actually different
-        assert!(signing_nonces[0].d.secret != signing_nonces[0].e.secret);
-        assert!(signing_nonces[0].d.secret != signing_nonces[1].d.secret);
 
-        // test that the commitments are actually different
-        assert!(signing_commitments[0].d_comm != signing_commitments[0].e_comm);
-        assert!(signing_commitments[0].d_comm != signing_commitments[1].d_comm);
+        let expected_length = signing_nonces.len() * 2;
+        let mut seen_nonces = Vec::with_capacity(expected_length);
+        for nonce in signing_nonces {
+            seen_nonces.push(nonce.d.secret);
+            seen_nonces.push(nonce.e.secret);
+        }
+        seen_nonces.dedup();
+
+        // ensure that each secret is unique
+        assert!(seen_nonces.len() == expected_length);
     }
 
     fn gen_signing_helper(
-        threshold: usize,
+        threshold: u32,
+        keypairs: &Vec<KeyPair>,
         rng: &mut ThreadRng,
-    ) -> (SigningPackage, HashMap<u32, Vec<Nonce>>) {
-        let mut nonces: HashMap<u32, Vec<Nonce>> = HashMap::with_capacity(threshold);
-        let mut signing_package = SigningPackage {
-            items: Vec::with_capacity(threshold),
-        };
+    ) -> (Vec<SigningCommitment>, HashMap<u32, Vec<NoncePair>>) {
+        let mut nonces: HashMap<u32, Vec<NoncePair>> = HashMap::with_capacity(threshold as usize);
+        let mut signing_commitments: Vec<SigningCommitment> =
+            Vec::with_capacity(threshold as usize);
+        let number_nonces_to_generate = 1;
 
-        for index in 1..threshold + 1 {
-            println!(
-                "generating nonces and commitments for participant {}",
-                index
-            );
-            let (participant_commitments, participant_nonces) = preprocess(1, rng);
+        for counter in 0..threshold {
+            let signing_keypair = &keypairs[counter as usize];
+            let (participant_commitments, participant_nonces) = preprocess(
+                number_nonces_to_generate,
+                signing_keypair.index,
+                signing_keypair.public,
+                rng,
+            )
+            .unwrap();
 
-            signing_package.items.push(SigningItem {
-                index: index,
-                commitment: participant_commitments[0],
-            });
-            nonces.insert(index as u32, participant_nonces);
+            signing_commitments.push(participant_commitments[0]);
+            nonces.insert(counter, participant_nonces);
         }
-        assert!(signing_package.items.len() == threshold);
-        assert!(nonces.len() == threshold);
-        (signing_package, nonces)
+        assert!(nonces.len() == (threshold as usize));
+        (signing_commitments, nonces)
+    }
+
+    fn gen_keypairs_dkg_helper(num_shares: u32, threshold: u32) -> Vec<KeyPair> {
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let mut participant_shares: HashMap<u32, Vec<Share>> =
+            HashMap::with_capacity(num_shares as usize);
+        let mut participant_commitments: Vec<KeyGenCommitment> =
+            Vec::with_capacity(num_shares as usize);
+        let mut participant_keypairs: Vec<KeyPair> = Vec::with_capacity(num_shares as usize);
+
+        for counter in 0..num_shares {
+            let participant_index = counter + 1;
+            let (com, shares) =
+                keygen_begin(num_shares, threshold, participant_index, &mut rng).unwrap();
+
+            for share in shares {
+                match participant_shares.get_mut(&share.receiver_index) {
+                    Some(list) => list.push(share),
+                    None => {
+                        let mut list = Vec::with_capacity(num_shares as usize);
+                        list.push(share);
+                        participant_shares.insert(share.receiver_index, list);
+                    }
+                }
+            }
+            participant_commitments.push(com);
+        }
+
+        // now, finalize the protocol
+        for counter in 0..num_shares {
+            let participant_index = counter + 1;
+            let res = match keygen_with_dkg_finalize(
+                participant_index, // participant indices should start at 1
+                &participant_shares[&participant_index],
+                &participant_commitments,
+            ) {
+                Ok(x) => x,
+                Err(err) => panic!(err),
+            };
+
+            participant_keypairs.push(res);
+        }
+
+        participant_keypairs
     }
 
     #[test]
-    fn valid_sign() {
-        let num_signers: usize = 5;
-        let threshold: usize = 3;
+    fn valid_sign_with_single_dealer() {
+        let num_signers = 5;
+        let threshold = 3;
         let mut rng: ThreadRng = rand::thread_rng();
 
-        let keygen_res = keygen_with_dealer(num_signers, threshold, &mut rng);
-        assert!(keygen_res.is_ok());
-        let (_, keypairs, group_pub_key) = keygen_res.unwrap();
+        let (_, keypairs) = keygen_with_dealer(num_signers, threshold, &mut rng).unwrap();
 
         let msg = "testing sign";
-        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &mut rng);
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
 
-        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold);
-        let group_commitment = gen_group_commitment(msg, &signing_package);
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
 
-        for index in 1..threshold + 1 {
-            println!("generating signature for participant {}", index);
-            let mut my_signing_nonces = signing_nonces[&(index as u32)].clone();
+        for counter in 0..threshold {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
             assert!(my_signing_nonces.len() == 1);
             let res = sign(
-                &keypairs[&(index as u32)],
+                &keypairs[counter as usize],
                 &signing_package,
                 &mut my_signing_nonces,
                 msg,
             )
             .unwrap();
-            println!("finished signing for participant {}", index);
 
             all_responses.push(res);
         }
 
-        let group_sig = aggregate(&all_responses, group_commitment).unwrap();
-        let is_valid = validate(msg, group_sig, group_pub_key);
-        assert!(is_valid);
+        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let group_pubkey = keypairs[1].group_public;
+        assert!(validate(msg, group_sig, group_pubkey).is_ok());
+    }
+
+    #[test]
+    fn valid_sign_with_dkg() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
+
+        for counter in 0..threshold {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
+            assert!(my_signing_nonces.len() == 1);
+            let res = sign(
+                &keypairs[counter as usize],
+                &signing_package,
+                &mut my_signing_nonces,
+                msg,
+            )
+            .unwrap();
+
+            all_responses.push(res);
+        }
+
+        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let group_pubkey = keypairs[1].group_public;
+        assert!(validate(msg, group_sig, group_pubkey).is_ok());
+    }
+
+    #[test]
+    fn valid_sign_with_dkg_larger_params() {
+        let num_signers = 10;
+        let threshold = 6;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing larger params sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
+
+        for counter in 0..threshold {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
+            assert!(my_signing_nonces.len() == 1);
+            let res = sign(
+                &keypairs[counter as usize],
+                &signing_package,
+                &mut my_signing_nonces,
+                msg,
+            )
+            .unwrap();
+
+            all_responses.push(res);
+        }
+
+        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let group_pubkey = keypairs[1].group_public;
+        assert!(validate(msg, group_sig, group_pubkey).is_ok());
+    }
+
+    #[test]
+    fn invalid_sign_too_few_responses_with_dkg() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
+
+        for counter in 0..(threshold - 1) {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
+            assert!(my_signing_nonces.len() == 1);
+            let res = sign(
+                &keypairs[counter as usize],
+                &signing_package,
+                &mut my_signing_nonces,
+                msg,
+            )
+            .unwrap();
+
+            all_responses.push(res);
+        }
+
+        // duplicate a share
+        all_responses.push(all_responses[0]);
+
+        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let group_pubkey = keypairs[0 as usize].group_public;
+        assert!(!validate(msg, group_sig, group_pubkey).is_ok());
+    }
+
+    #[test]
+    fn invalid_sign_bad_group_public_key_with_dkg() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing different message sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
+
+        for counter in 0..(threshold - 1) {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
+            assert!(my_signing_nonces.len() == 1);
+            let res = sign(
+                &keypairs[counter as usize],
+                &signing_package,
+                &mut my_signing_nonces,
+                msg,
+            )
+            .unwrap();
+
+            all_responses.push(res);
+        }
+
+        // duplicate a share
+        all_responses.push(all_responses[0]);
+
+        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let group_pubkey = keypairs[0 as usize].public; // Use an individual public key instead of the correct public key
+        assert!(!validate(msg, group_sig, group_pubkey).is_ok());
+    }
+
+    #[test]
+    fn invalid_sign_dirty_nonce_with_dkg() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut my_signing_nonces = signing_nonces[&0].clone();
+
+        // set the signing nonce for the first signer to already having been used
+        my_signing_nonces[0].mark_as_used();
+
+        let res = sign(&keypairs[0], &signing_package, &mut my_signing_nonces, msg);
+
+        assert!(!res.is_ok());
+    }
+
+    #[test]
+    fn invalid_sign_with_dealer() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let (_, keypairs) = keygen_with_dealer(num_signers, threshold, &mut rng).unwrap();
+
+        let msg = "testing sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
+
+        {
+            // test duplicated participants
+            for counter in 1..threshold {
+                let mut my_signing_nonces = signing_nonces[&counter].clone();
+                assert!(my_signing_nonces.len() == 1);
+                let res = sign(
+                    &keypairs[counter as usize],
+                    &signing_package,
+                    &mut my_signing_nonces,
+                    msg,
+                )
+                .unwrap();
+
+                all_responses.push(res);
+            }
+
+            // duplicate one response from a participant
+            all_responses.push(all_responses[0]);
+
+            let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+            let group_pubkey = keypairs[1].group_public;
+            assert!(!validate(msg, group_sig, group_pubkey).is_ok());
+        }
     }
 
     #[test]
     fn valid_validate_single_party() {
-        let privkey = Secret::from(42u32);
+        let privkey = Scalar::from(42u32);
         let pubkey = &constants::RISTRETTO_BASEPOINT_TABLE * &privkey;
 
         let msg = "testing sign";
@@ -291,13 +574,12 @@ mod tests {
             r: commitment,
             z: z,
         };
-        let is_valid = validate(msg, sig, pubkey);
-        assert!(is_valid);
+        assert!(validate(msg, sig, pubkey).is_ok());
     }
 
     #[test]
     fn invalid_validate_single_party() {
-        let privkey = Secret::from(42u32);
+        let privkey = Scalar::from(42u32);
         let pubkey = &constants::RISTRETTO_BASEPOINT_TABLE * &privkey;
 
         let msg = "testing sign";
@@ -312,49 +594,6 @@ mod tests {
             r: commitment,
             z: z,
         };
-        let is_valid = validate(msg, sig, pubkey);
-        assert!(!is_valid);
-    }
-
-    #[test]
-    fn valid_preprocess_can_sign_valid_simple_schnorr() {
-        let mut rng: ThreadRng = rand::thread_rng();
-        let (_, keypairs, group_pubkey) = keygen_with_dealer(3, 1, &mut rng).unwrap();
-        let signer_one = keypairs[&1];
-
-        let msg = "testing sign";
-        let mut rng: ThreadRng = rand::thread_rng();
-
-        let (_, signing_nonces) = preprocess(1, &mut rng);
-        let min_signers = vec![1];
-        let lambda_1 = get_lagrange_coeff(1, &min_signers).unwrap();
-        {
-            let nonce = signing_nonces[0].d.secret; // random nonce
-            let commitment = signing_nonces[0].d.public;
-            let c = gen_c(msg, commitment);
-
-            let z = nonce + (signer_one.secret * lambda_1 * c);
-
-            let sig = Signature {
-                r: commitment,
-                z: z,
-            };
-            let is_valid = validate(msg, sig, group_pubkey);
-            assert!(is_valid);
-        }
-        {
-            let nonce = signing_nonces[0].e.secret; // random nonce
-            let commitment = signing_nonces[0].e.public;
-            let c = gen_c(msg, commitment);
-
-            let z = nonce + (signer_one.secret * lambda_1 * c);
-
-            let sig = Signature {
-                r: commitment,
-                z: z,
-            };
-            let is_valid = validate(msg, sig, group_pubkey);
-            assert!(is_valid);
-        }
+        assert!(!validate(msg, sig, pubkey).is_ok());
     }
 }

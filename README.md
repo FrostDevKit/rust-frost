@@ -3,12 +3,15 @@
 This implementation was part of the contribution for the following paper:
 
 Chelsea Komlo, Ian Goldberg.
-"FROST: Flexible Round-Optimized Schnorr Threshold SIgnatures."
+"FROST: Flexible Round-Optimized Schnorr Threshold SIgnatures." Under
+submission.
 
 ## Use
 
 Note that this library does not provide support for serialization and
-deserialization of data.
+deserialization of data, and does not validate whether or not nonces have been
+used in previous signing operations. Implementations *must* provide the
+capability to guard against nonce-reuse by implementing such checks.
 
 ## Development
 
