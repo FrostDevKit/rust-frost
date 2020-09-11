@@ -9,9 +9,15 @@ pub struct BindingValue {
     pub rho_i: Scalar,
 }
 
-pub struct KeyGenCommitment {
-    pub index: u32,
+pub struct SharesCommitment {
     pub commitment: Vec<RistrettoPoint>,
+}
+
+pub struct KeyGenDKGCommitment {
+    pub index: u32,
+    pub shares_commitment: SharesCommitment,
+    pub zkp: Signature,
+    pub secret_commitment: RistrettoPoint,
 }
 
 #[derive(Copy, Clone)]

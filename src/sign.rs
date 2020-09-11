@@ -152,13 +152,21 @@ pub fn aggregate(
 }
 
 /// validate instantiates a plain Schnorr validation operation
-pub fn validate(msg: &str, sig: Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
+pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
     let c = gen_c(msg, sig.r);
 
     match sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * c) {
         true => Ok(()),
         false => Err("Signature is invalid"),
     }
+}
+
+pub fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
+    let mut hasher = Sha256::new();
+    hasher.update(msg);
+    hasher.update(group_commitment.compress().to_bytes());
+    let result = hasher.finalize();
+    Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
 }
 
 fn get_lagrange_coeff(
@@ -216,14 +224,6 @@ fn gen_group_commitment(
     }
 
     Ok(accumulator)
-}
-
-fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
-    let mut hasher = Sha256::new();
-    hasher.update(msg);
-    hasher.update(group_commitment.compress().to_bytes());
-    let result = hasher.finalize();
-    Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
 }
 
 #[cfg(test)]
@@ -285,7 +285,7 @@ mod tests {
 
         let mut participant_shares: HashMap<u32, Vec<Share>> =
             HashMap::with_capacity(num_shares as usize);
-        let mut participant_commitments: Vec<KeyGenCommitment> =
+        let mut participant_commitments: Vec<KeyGenDKGCommitment> =
             Vec::with_capacity(num_shares as usize);
         let mut participant_keypairs: Vec<KeyPair> = Vec::with_capacity(num_shares as usize);
 
@@ -354,7 +354,7 @@ mod tests {
 
         let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
         let group_pubkey = keypairs[1].group_public;
-        assert!(validate(msg, group_sig, group_pubkey).is_ok());
+        assert!(validate(msg, &group_sig, group_pubkey).is_ok());
     }
 
     #[test]
@@ -386,7 +386,7 @@ mod tests {
 
         let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
         let group_pubkey = keypairs[1].group_public;
-        assert!(validate(msg, group_sig, group_pubkey).is_ok());
+        assert!(validate(msg, &group_sig, group_pubkey).is_ok());
     }
 
     #[test]
@@ -418,7 +418,7 @@ mod tests {
 
         let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
         let group_pubkey = keypairs[1].group_public;
-        assert!(validate(msg, group_sig, group_pubkey).is_ok());
+        assert!(validate(msg, &group_sig, group_pubkey).is_ok());
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod tests {
 
         let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
         let group_pubkey = keypairs[0 as usize].group_public;
-        assert!(!validate(msg, group_sig, group_pubkey).is_ok());
+        assert!(!validate(msg, &group_sig, group_pubkey).is_ok());
     }
 
     #[test]
@@ -488,7 +488,7 @@ mod tests {
 
         let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
         let group_pubkey = keypairs[0 as usize].public; // Use an individual public key instead of the correct public key
-        assert!(!validate(msg, group_sig, group_pubkey).is_ok());
+        assert!(!validate(msg, &group_sig, group_pubkey).is_ok());
     }
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
 
             let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
             let group_pubkey = keypairs[1].group_public;
-            assert!(!validate(msg, group_sig, group_pubkey).is_ok());
+            assert!(!validate(msg, &group_sig, group_pubkey).is_ok());
         }
     }
 
@@ -566,7 +566,7 @@ mod tests {
             r: commitment,
             z: z,
         };
-        assert!(validate(msg, sig, pubkey).is_ok());
+        assert!(validate(msg, &sig, pubkey).is_ok());
     }
 
     #[test]
@@ -586,6 +586,6 @@ mod tests {
             r: commitment,
             z: z,
         };
-        assert!(!validate(msg, sig, pubkey).is_ok());
+        assert!(!validate(msg, &sig, pubkey).is_ok());
     }
 }
