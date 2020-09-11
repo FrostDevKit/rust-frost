@@ -48,9 +48,9 @@ pub fn keygen_begin(
     generate_shares(secret, numshares, threshold, generator_index, rng)
 }
 
-/// keygen_with_dkg_finalize finalizes the distributed key generation protocol.
+/// keygen_finalize finalizes the distributed key generation protocol.
 /// It is performed once per participant.
-pub fn keygen_with_dkg_finalize(
+pub fn keygen_finalize(
     index: u32,
     shares: &Vec<Share>,
     commitments: &Vec<KeyGenCommitment>,
@@ -101,7 +101,10 @@ fn verify_share(share: &Share, com: &KeyGenCommitment) -> Result<(), &'static st
     }
 }
 
-/// Create secret shares for a given secret.
+/// Create secret shares for a given secret. This function accepts a secret to
+/// generate shares from. While in FROST this secret should always be generated
+/// randomly, we allow this secret to be specified for this internal function
+/// for testability
 fn generate_shares(
     secret: Scalar,
     numshares: u32,
@@ -199,11 +202,7 @@ mod tests {
 
         // now, finalize the protocol
         for index in 1..num_shares + 1 {
-            let res = keygen_with_dkg_finalize(
-                index,
-                &participant_shares[&index],
-                &participant_commitments,
-            );
+            let res = keygen_finalize(index, &participant_shares[&index], &participant_commitments);
             assert!(res.is_ok());
         }
     }

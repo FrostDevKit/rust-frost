@@ -83,8 +83,6 @@ pub fn sign(
         true => return Err("signing nonce has already been used!"),
     }
 
-    // TODO before going any further, ensure that each nonce are in G*
-
     let my_rho_i = match bindings.iter().find(|x| x.index == keypair.index) {
         Some(x) => x.rho_i,
         None => return Err("No matching rho_i value for signer"),
@@ -318,7 +316,7 @@ mod tests {
         // now, finalize the protocol
         for counter in 0..num_shares {
             let participant_index = counter + 1;
-            let res = match keygen_with_dkg_finalize(
+            let res = match keygen_finalize(
                 participant_index, // participant indices should start at 1
                 &participant_shares[&participant_index],
                 &participant_commitments,
