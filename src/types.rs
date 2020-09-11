@@ -2,6 +2,7 @@ use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
+use rand::rngs::ThreadRng;
 
 pub struct BindingValue {
     pub index: u32,
@@ -55,7 +56,9 @@ pub struct NoncePair {
 }
 
 impl NoncePair {
-    pub fn new(d: Scalar, e: Scalar) -> Result<NoncePair, &'static str> {
+    pub fn new(rng: &mut ThreadRng) -> Result<NoncePair, &'static str> {
+        let d = Scalar::random(rng);
+        let e = Scalar::random(rng);
         let d_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &d;
         let e_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &e;
 

@@ -20,10 +20,7 @@ pub fn preprocess(
     let mut commitments = Vec::with_capacity(number_commitments);
 
     for _ in 0..number_commitments {
-        let d = Scalar::random(rng);
-        let e = Scalar::random(rng);
-
-        let nonce_pair = NoncePair::new(d, e)?;
+        let nonce_pair = NoncePair::new(rng)?;
         nonces.push(nonce_pair);
 
         let commitment = SigningCommitment::new(
