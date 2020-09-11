@@ -32,7 +32,7 @@ pub fn keygen_with_dealer(
     Ok((com, keypairs))
 }
 
-/// keygen_begin is performed by one participant to initializes a Pedersen
+/// keygen_begin is performed by each participant to initialize a Pedersen
 ///
 /// This function assumes there is an additional layer which performs the
 /// distribution of shares to their intended participants.
@@ -80,23 +80,6 @@ pub fn keygen_finalize(
         public,
         group_public,
     })
-}
-
-/// Verify that a share is consistent with a commitment.
-fn verify_share(share: &Share, com: &KeyGenCommitment) -> Result<(), &'static str> {
-    let f_result = &constants::RISTRETTO_BASEPOINT_TABLE * &share.value;
-
-    let x = Scalar::from(share.receiver_index);
-
-    let (_, result) = com.commitment.iter().fold(
-        (Scalar::one(), RistrettoPoint::identity()),
-        |(x_to_the_i, sum_so_far), comm_i| (x_to_the_i * x, sum_so_far + x_to_the_i * comm_i),
-    );
-
-    match f_result == result {
-        true => Ok(()),
-        false => Err("Share is invalid."),
-    }
 }
 
 /// Create secret shares for a given secret. This function accepts a secret to
@@ -162,6 +145,23 @@ fn generate_shares(
         },
         shares,
     ))
+}
+
+/// Verify that a share is consistent with a commitment.
+fn verify_share(share: &Share, com: &KeyGenCommitment) -> Result<(), &'static str> {
+    let f_result = &constants::RISTRETTO_BASEPOINT_TABLE * &share.value;
+
+    let x = Scalar::from(share.receiver_index);
+
+    let (_, result) = com.commitment.iter().fold(
+        (Scalar::one(), RistrettoPoint::identity()),
+        |(x_to_the_i, sum_so_far), comm_i| (x_to_the_i * x, sum_so_far + x_to_the_i * comm_i),
+    );
+
+    match f_result == result {
+        true => Ok(()),
+        false => Err("Share is invalid."),
+    }
 }
 
 #[cfg(test)]

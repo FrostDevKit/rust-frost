@@ -4,6 +4,7 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 use rand::rngs::ThreadRng;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::convert::TryInto;
 use types::*;
 
@@ -46,10 +47,13 @@ pub fn sign(
     signing_nonces: &mut Vec<NoncePair>,
     msg: &str,
 ) -> Result<SigningResponse, &'static str> {
-    let bindings = signing_commitments
-        .iter()
-        .map(|x| gen_rho_i(x.index, msg, signing_commitments))
-        .collect();
+    let mut bindings: HashMap<u32, Scalar> = HashMap::with_capacity(signing_commitments.len());
+
+    for counter in 0..signing_commitments.len() {
+        let comm = signing_commitments[counter];
+        let rho_i = gen_rho_i(comm.index, msg, signing_commitments);
+        bindings.insert(comm.index, rho_i);
+    }
 
     let group_commitment = gen_group_commitment(&signing_commitments, &bindings)?;
 
@@ -80,10 +84,7 @@ pub fn sign(
         true => return Err("signing nonce has already been used!"),
     }
 
-    let my_rho_i = match bindings.iter().find(|x| x.index == keypair.index) {
-        Some(x) => x.rho_i,
-        None => return Err("No matching rho_i value for signer"),
-    };
+    let my_rho_i = bindings[&keypair.index];
 
     let c = gen_c(msg, group_commitment);
 
@@ -107,20 +108,20 @@ pub fn aggregate(
     signing_commitments: &Vec<SigningCommitment>,
     signing_responses: &Vec<SigningResponse>,
 ) -> Result<Signature, &'static str> {
-    let bindings = signing_commitments
-        .iter()
-        .map(|x| gen_rho_i(x.index, msg, signing_commitments))
-        .collect();
+    let mut bindings: HashMap<u32, Scalar> = HashMap::with_capacity(signing_commitments.len());
+
+    for counter in 0..signing_commitments.len() {
+        let comm = signing_commitments[counter];
+        let rho_i = gen_rho_i(comm.index, msg, signing_commitments);
+        bindings.insert(comm.index, rho_i);
+    }
 
     let group_commitment = gen_group_commitment(&signing_commitments, &bindings)?;
     let c = gen_c(msg, group_commitment);
 
     // check the validity of each participant's response
     for resp in signing_responses {
-        let matching_rho_i = match bindings.iter().find(|x| x.index == resp.index) {
-            Some(x) => x.rho_i,
-            None => return Err("No matching rho_i value for signer"),
-        };
+        let matching_rho_i = bindings[&resp.index];
 
         let indices = signing_commitments.iter().map(|item| item.index).collect();
 
@@ -167,7 +168,7 @@ fn get_lagrange_coeff(
     let mut num = Scalar::one();
     let mut den = Scalar::one();
     for j in all_signer_indices {
-        if j == &signer_index {
+        if *j == signer_index {
             continue;
         }
         num *= Scalar::from(*j);
@@ -187,7 +188,7 @@ fn slice_to_array_helper(s: &[u8]) -> [u8; 32] {
     s.try_into().expect("slice with incorrect length")
 }
 
-fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>) -> BindingValue {
+fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>) -> Scalar {
     let mut hasher = Sha256::new();
     hasher.update("I".as_bytes());
     hasher.update(index.to_be_bytes());
@@ -199,21 +200,17 @@ fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>
     }
     let result = hasher.finalize();
 
-    let rho_i = Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()));
-    BindingValue { index, rho_i }
+    Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
 }
 
 fn gen_group_commitment(
     signing_commitments: &Vec<SigningCommitment>,
-    bindings: &Vec<BindingValue>,
+    bindings: &HashMap<u32, Scalar>,
 ) -> Result<RistrettoPoint, &'static str> {
     let mut accumulator = RistrettoPoint::identity();
 
     for commitment in signing_commitments {
-        let rho_i = match bindings.iter().find(|x| x.index == commitment.index) {
-            Some(x) => x.rho_i,
-            None => return Err("No matching rho_i for commitment!"),
-        };
+        let rho_i = bindings[&commitment.index];
 
         accumulator += commitment.d + (commitment.e * rho_i)
     }
