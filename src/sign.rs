@@ -285,7 +285,7 @@ mod tests {
 
         let mut participant_shares: HashMap<u32, Vec<Share>> =
             HashMap::with_capacity(num_shares as usize);
-        let mut participant_commitments: Vec<KeyGenDKGCommitment> =
+        let mut participant_commitments: Vec<KeyGenDKGProposedCommitment> =
             Vec::with_capacity(num_shares as usize);
         let mut participant_keypairs: Vec<KeyPair> = Vec::with_capacity(num_shares as usize);
 
@@ -307,13 +307,17 @@ mod tests {
             participant_commitments.push(com);
         }
 
+        let (invalid_peer_ids, valid_commitments) =
+            keygen_receive_commitments_and_validate_peers(participant_commitments);
+        assert!(invalid_peer_ids.len() == 0);
+
         // now, finalize the protocol
         for counter in 0..num_shares {
             let participant_index = counter + 1;
             let res = match keygen_finalize(
                 participant_index, // participant indices should start at 1
                 &participant_shares[&participant_index],
-                &participant_commitments,
+                &valid_commitments,
             ) {
                 Ok(x) => x,
                 Err(err) => panic!(err),

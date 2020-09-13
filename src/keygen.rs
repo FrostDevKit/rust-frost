@@ -43,7 +43,7 @@ pub fn keygen_begin(
     threshold: u32,
     generator_index: u32,
     rng: &mut ThreadRng,
-) -> Result<(KeyGenDKGCommitment, Vec<Share>), &'static str> {
+) -> Result<(KeyGenDKGProposedCommitment, Vec<Share>), &'static str> {
     let secret = Scalar::random(rng);
     let (shares_com, shares) = generate_shares(secret, numshares, threshold, generator_index, rng)?;
     let secret_commitment = &constants::RISTRETTO_BASEPOINT_TABLE * &secret;
@@ -54,7 +54,7 @@ pub fn keygen_begin(
     let c = gen_c("keygen begin", r_pub);
     let z = r + secret * c;
 
-    let dkg_commitment = KeyGenDKGCommitment {
+    let dkg_commitment = KeyGenDKGProposedCommitment {
         index: generator_index,
         shares_commitment: shares_com,
         zkp: Signature { r: r_pub, z: z },
@@ -69,8 +69,12 @@ pub fn keygen_begin(
 /// secret term. It returns a list of all participants who failed the check,
 /// a list of commitments for the peers that remain in a valid state,
 /// and an error term.
+///
+/// Here, we return a DKG commitmentment that is explicitly marked as valid,
+/// to ensure that this step of the protocol is performed before going on to
+/// keygen_finalize
 pub fn keygen_receive_commitments_and_validate_peers(
-    peer_commitments: Vec<KeyGenDKGCommitment>,
+    peer_commitments: Vec<KeyGenDKGProposedCommitment>,
 ) -> (Vec<u32>, Vec<KeyGenDKGCommitment>) {
     let mut invalid_peer_ids = Vec::new();
     let mut valid_peer_commitments: Vec<KeyGenDKGCommitment> =
@@ -86,7 +90,12 @@ pub fn keygen_receive_commitments_and_validate_peers(
         {
             invalid_peer_ids.push(commitment.index);
         } else {
-            valid_peer_commitments.push(commitment);
+            valid_peer_commitments.push(KeyGenDKGCommitment {
+                index: commitment.index,
+                shares_commitment: commitment.shares_commitment,
+                zkp: commitment.zkp,
+                secret_commitment: commitment.secret_commitment,
+            });
         }
     }
 
@@ -218,7 +227,7 @@ mod tests {
 
         let mut participant_shares: HashMap<u32, Vec<Share>> =
             HashMap::with_capacity(num_shares as usize);
-        let mut participant_commitments: Vec<KeyGenDKGCommitment> =
+        let mut participant_commitments: Vec<KeyGenDKGProposedCommitment> =
             Vec::with_capacity(num_shares as usize);
 
         for index in 1..num_shares + 1 {
@@ -239,9 +248,13 @@ mod tests {
             participant_commitments.push(shares_com);
         }
 
+        let (invalid_peer_ids, valid_commitments) =
+            keygen_receive_commitments_and_validate_peers(participant_commitments);
+        assert!(invalid_peer_ids.len() == 0);
+
         // now, finalize the protocol
         for index in 1..num_shares + 1 {
-            let res = keygen_finalize(index, &participant_shares[&index], &participant_commitments);
+            let res = keygen_finalize(index, &participant_shares[&index], &valid_commitments);
             assert!(res.is_ok());
         }
     }
@@ -253,7 +266,7 @@ mod tests {
         let num_shares = 5;
         let threshold = 3;
 
-        let mut participant_commitments: Vec<KeyGenDKGCommitment> =
+        let mut participant_commitments: Vec<KeyGenDKGProposedCommitment> =
             Vec::with_capacity(num_shares as usize);
 
         for index in 1..num_shares + 1 {
