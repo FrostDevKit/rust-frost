@@ -108,6 +108,28 @@ pub fn aggregate(
     signing_commitments: &Vec<SigningCommitment>,
     signing_responses: &Vec<SigningResponse>,
 ) -> Result<Signature, &'static str> {
+    // first, make sure that each commitment corresponds to exactly one response
+    let mut commitment_indices = signing_commitments
+        .iter()
+        .map(|com| com.index)
+        .collect::<Vec<u32>>();
+    let mut response_indices = signing_responses
+        .iter()
+        .map(|com| com.index)
+        .collect::<Vec<u32>>();
+
+    commitment_indices.sort();
+    response_indices.sort();
+
+    if commitment_indices.len() != response_indices.len() {
+        return Err("Mismatched number of commitments and responses");
+    }
+    for counter in 0..commitment_indices.len() {
+        if commitment_indices[counter] != response_indices[counter] {
+            return Err("Mismatched commitment without corresponding response");
+        }
+    }
+
     let mut bindings: HashMap<u32, Scalar> = HashMap::with_capacity(signing_commitments.len());
 
     for counter in 0..signing_commitments.len() {
@@ -455,9 +477,42 @@ mod tests {
         // duplicate a share
         all_responses.push(all_responses[0]);
 
-        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
-        let group_pubkey = keypairs[0 as usize].group_public;
-        assert!(!validate(msg, &group_sig, group_pubkey).is_ok());
+        let res = aggregate(msg, &signing_package, &all_responses);
+        assert!(!res.is_ok());
+    }
+
+    #[test]
+    fn invalid_sign_invalid_response_with_dkg() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing sign";
+        let (signing_package, signing_nonces) = gen_signing_helper(threshold, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
+
+        for counter in 0..threshold {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
+            assert!(my_signing_nonces.len() == 1);
+            let res = sign(
+                &keypairs[counter as usize],
+                &signing_package,
+                &mut my_signing_nonces,
+                msg,
+            )
+            .unwrap();
+
+            all_responses.push(res);
+        }
+
+        // create a totally invalid response
+        all_responses[0].response = Scalar::from(42u32);
+
+        let res = aggregate(msg, &signing_package, &all_responses);
+        assert!(!res.is_ok());
     }
 
     #[test]
@@ -473,7 +528,7 @@ mod tests {
 
         let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
 
-        for counter in 0..(threshold - 1) {
+        for counter in 0..threshold {
             let mut my_signing_nonces = signing_nonces[&counter].clone();
             assert!(my_signing_nonces.len() == 1);
             let res = sign(
@@ -487,12 +542,10 @@ mod tests {
             all_responses.push(res);
         }
 
-        // duplicate a share
-        all_responses.push(all_responses[0]);
-
         let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
-        let group_pubkey = keypairs[0 as usize].public; // Use an individual public key instead of the correct public key
-        assert!(!validate(msg, &group_sig, group_pubkey).is_ok());
+        // use one of the participant's public keys instead
+        let invalid_group_pubkey = keypairs[0 as usize].public;
+        assert!(!validate(msg, &group_sig, invalid_group_pubkey).is_ok());
     }
 
     #[test]
@@ -531,7 +584,7 @@ mod tests {
 
         {
             // test duplicated participants
-            for counter in 1..threshold {
+            for counter in 0..threshold {
                 let mut my_signing_nonces = signing_nonces[&counter].clone();
                 assert!(my_signing_nonces.len() == 1);
                 let res = sign(
@@ -545,12 +598,9 @@ mod tests {
                 all_responses.push(res);
             }
 
-            // duplicate one response from a participant
-            all_responses.push(all_responses[0]);
-
             let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
-            let group_pubkey = keypairs[1].group_public;
-            assert!(!validate(msg, &group_sig, group_pubkey).is_ok());
+            let invalid_group_pubkey = RistrettoPoint::identity();
+            assert!(!validate(msg, &group_sig, invalid_group_pubkey).is_ok());
         }
     }
 
