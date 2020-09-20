@@ -14,7 +14,6 @@ use types::*;
 pub fn preprocess(
     number_commitments: usize,
     participant_index: u32,
-    participant_pubkey: RistrettoPoint,
     rng: &mut ThreadRng,
 ) -> Result<(Vec<SigningCommitment>, Vec<NoncePair>), &'static str> {
     let mut nonces: Vec<NoncePair> = Vec::with_capacity(number_commitments);
@@ -24,12 +23,8 @@ pub fn preprocess(
         let nonce_pair = NoncePair::new(rng)?;
         nonces.push(nonce_pair);
 
-        let commitment = SigningCommitment::new(
-            nonce_pair.d.public,
-            nonce_pair.e.public,
-            participant_index,
-            participant_pubkey,
-        )?;
+        let commitment =
+            SigningCommitment::new(nonce_pair.d.public, nonce_pair.e.public, participant_index)?;
 
         commitments.push(commitment);
     }
@@ -107,6 +102,7 @@ pub fn aggregate(
     msg: &str,
     signing_commitments: &Vec<SigningCommitment>,
     signing_responses: &Vec<SigningResponse>,
+    signer_pubkeys: &HashMap<u32, RistrettoPoint>,
 ) -> Result<Signature, &'static str> {
     // first, make sure that each commitment corresponds to exactly one response
     let mut commitment_indices = signing_commitments
@@ -155,8 +151,12 @@ pub fn aggregate(
         };
 
         let comm_i = matching_commitment.d + (matching_commitment.e * matching_rho_i);
+        let signer_pubkey = match signer_pubkeys.get(&matching_commitment.index) {
+            Some(x) => x,
+            None => return Err("commitment does not have a matching signer public key!"),
+        };
         let is_valid = (&constants::RISTRETTO_BASEPOINT_TABLE * &resp.response)
-            == (comm_i + (matching_commitment.signer_pubkey * (c * lambda_i)));
+            == (comm_i + (signer_pubkey * (c * lambda_i)));
 
         if !is_valid {
             return Err("Invalid signer response");
@@ -258,8 +258,7 @@ mod tests {
     #[test]
     fn preprocess_generates_values() {
         let mut rng: ThreadRng = rand::thread_rng();
-        let (signing_commitments, signing_nonces) =
-            preprocess(5, 1, RistrettoPoint::identity(), &mut rng).unwrap();
+        let (signing_commitments, signing_nonces) = preprocess(5, 1, &mut rng).unwrap();
         assert!(signing_commitments.len() == 5);
         assert!(signing_nonces.len() == 5);
 
@@ -287,19 +286,25 @@ mod tests {
 
         for counter in 0..threshold {
             let signing_keypair = &keypairs[counter as usize];
-            let (participant_commitments, participant_nonces) = preprocess(
-                number_nonces_to_generate,
-                signing_keypair.index,
-                signing_keypair.public,
-                rng,
-            )
-            .unwrap();
+            let (participant_commitments, participant_nonces) =
+                preprocess(number_nonces_to_generate, signing_keypair.index, rng).unwrap();
 
             signing_commitments.push(participant_commitments[0]);
             nonces.insert(counter, participant_nonces);
         }
         assert!(nonces.len() == (threshold as usize));
         (signing_commitments, nonces)
+    }
+
+    fn get_signer_pubkeys(keypairs: &Vec<KeyPair>) -> HashMap<u32, RistrettoPoint> {
+        let mut signer_pubkeys: HashMap<u32, RistrettoPoint> =
+            HashMap::with_capacity(keypairs.len());
+
+        for keypair in keypairs {
+            signer_pubkeys.insert(keypair.index, keypair.public);
+        }
+
+        signer_pubkeys
     }
 
     fn gen_keypairs_dkg_helper(num_shares: u32, threshold: u32) -> Vec<KeyPair> {
@@ -378,7 +383,8 @@ mod tests {
             all_responses.push(res);
         }
 
-        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let group_sig = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys).unwrap();
         let group_pubkey = keypairs[1].group_public;
         assert!(validate(msg, &group_sig, group_pubkey).is_ok());
     }
@@ -410,7 +416,8 @@ mod tests {
             all_responses.push(res);
         }
 
-        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let group_sig = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys).unwrap();
         let group_pubkey = keypairs[1].group_public;
         assert!(validate(msg, &group_sig, group_pubkey).is_ok());
     }
@@ -442,7 +449,8 @@ mod tests {
             all_responses.push(res);
         }
 
-        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let group_sig = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys).unwrap();
         let group_pubkey = keypairs[1].group_public;
         assert!(validate(msg, &group_sig, group_pubkey).is_ok());
     }
@@ -477,7 +485,8 @@ mod tests {
         // duplicate a share
         all_responses.push(all_responses[0]);
 
-        let res = aggregate(msg, &signing_package, &all_responses);
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let res = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys);
         assert!(!res.is_ok());
     }
 
@@ -511,7 +520,8 @@ mod tests {
         // create a totally invalid response
         all_responses[0].response = Scalar::from(42u32);
 
-        let res = aggregate(msg, &signing_package, &all_responses);
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let res = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys);
         assert!(!res.is_ok());
     }
 
@@ -542,7 +552,8 @@ mod tests {
             all_responses.push(res);
         }
 
-        let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let group_sig = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys).unwrap();
         // use one of the participant's public keys instead
         let invalid_group_pubkey = keypairs[0 as usize].public;
         assert!(!validate(msg, &group_sig, invalid_group_pubkey).is_ok());
@@ -598,7 +609,9 @@ mod tests {
                 all_responses.push(res);
             }
 
-            let group_sig = aggregate(msg, &signing_package, &all_responses).unwrap();
+            let signer_pubkeys = get_signer_pubkeys(&keypairs);
+            let group_sig =
+                aggregate(msg, &signing_package, &all_responses, &signer_pubkeys).unwrap();
             let invalid_group_pubkey = RistrettoPoint::identity();
             assert!(!validate(msg, &group_sig, invalid_group_pubkey).is_ok());
         }

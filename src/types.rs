@@ -36,7 +36,6 @@ pub struct SigningResponse {
 #[derive(Copy, Clone)]
 pub struct SigningCommitment {
     pub index: u32,
-    pub signer_pubkey: RistrettoPoint,
     pub d: RistrettoPoint,
     pub e: RistrettoPoint,
 }
@@ -46,18 +45,12 @@ impl SigningCommitment {
         d: RistrettoPoint,
         e: RistrettoPoint,
         index: u32,
-        signer_pubkey: RistrettoPoint,
     ) -> Result<SigningCommitment, &'static str> {
         if d == RistrettoPoint::identity() || e == RistrettoPoint::identity() {
             return Err("Invalid signing commitment");
         }
 
-        Ok(SigningCommitment {
-            d,
-            e,
-            index,
-            signer_pubkey,
-        })
+        Ok(SigningCommitment { d, e, index })
     }
 }
 
