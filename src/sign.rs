@@ -24,7 +24,7 @@ pub fn preprocess(
         nonces.push(nonce_pair);
 
         let commitment =
-            SigningCommitment::new(nonce_pair.d.public, nonce_pair.e.public, participant_index)?;
+            SigningCommitment::new(participant_index, nonce_pair.d.public, nonce_pair.e.public)?;
 
         commitments.push(commitment);
     }
@@ -44,8 +44,7 @@ pub fn sign(
 ) -> Result<SigningResponse, &'static str> {
     let mut bindings: HashMap<u32, Scalar> = HashMap::with_capacity(signing_commitments.len());
 
-    for counter in 0..signing_commitments.len() {
-        let comm = signing_commitments[counter];
+    for comm in signing_commitments {
         let rho_i = gen_rho_i(comm.index, msg, signing_commitments);
         bindings.insert(comm.index, rho_i);
     }
@@ -114,16 +113,20 @@ pub fn aggregate(
         .map(|com| com.index)
         .collect::<Vec<u32>>();
 
-    commitment_indices.sort();
-    response_indices.sort();
-
     if commitment_indices.len() != response_indices.len() {
         return Err("Mismatched number of commitments and responses");
     }
-    for counter in 0..commitment_indices.len() {
-        if commitment_indices[counter] != response_indices[counter] {
-            return Err("Mismatched commitment without corresponding response");
-        }
+
+    commitment_indices.sort();
+    response_indices.sort();
+
+    match commitment_indices
+        .iter()
+        .zip(response_indices)
+        .all(|(a, b)| *a == b)
+    {
+        true => (),
+        false => return Err("Mismatched commitment without corresponding response"),
     }
 
     let mut bindings: HashMap<u32, Scalar> = HashMap::with_capacity(signing_commitments.len());

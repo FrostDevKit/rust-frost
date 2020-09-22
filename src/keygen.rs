@@ -46,7 +46,6 @@ pub fn keygen_begin(
 ) -> Result<(KeyGenDKGProposedCommitment, Vec<Share>), &'static str> {
     let secret = Scalar::random(rng);
     let (shares_com, shares) = generate_shares(secret, numshares, threshold, generator_index, rng)?;
-    let secret_commitment = &constants::RISTRETTO_BASEPOINT_TABLE * &secret;
 
     let r = Scalar::random(rng);
     let r_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &r;
@@ -58,7 +57,6 @@ pub fn keygen_begin(
         index: generator_index,
         shares_commitment: shares_com,
         zkp: Signature { r: r_pub, z: z },
-        secret_commitment: secret_commitment,
     };
 
     Ok((dkg_commitment, shares))
@@ -84,7 +82,7 @@ pub fn keygen_receive_commitments_and_validate_peers(
         if !validate(
             "keygen begin",
             &commitment.zkp,
-            commitment.secret_commitment,
+            commitment.get_commitment_to_secret(),
         )
         .is_ok()
         {
@@ -93,8 +91,6 @@ pub fn keygen_receive_commitments_and_validate_peers(
             valid_peer_commitments.push(KeyGenDKGCommitment {
                 index: commitment.index,
                 shares_commitment: commitment.shares_commitment,
-                zkp: commitment.zkp,
-                secret_commitment: commitment.secret_commitment,
             });
         }
     }
@@ -276,7 +272,7 @@ mod tests {
         }
 
         // now, set the first commitments to be invalid
-        participant_commitments[0].secret_commitment = RistrettoPoint::identity();
+        participant_commitments[0].shares_commitment.commitment[0] = RistrettoPoint::identity();
         let invalid_participant_id = participant_commitments[0].index;
 
         // now, ensure that this participant is marked as invalid

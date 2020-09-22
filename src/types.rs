@@ -17,14 +17,17 @@ pub struct KeyGenDKGProposedCommitment {
     pub index: u32,
     pub shares_commitment: SharesCommitment,
     pub zkp: Signature,
-    pub secret_commitment: RistrettoPoint,
+}
+
+impl KeyGenDKGProposedCommitment {
+    pub fn get_commitment_to_secret(&self) -> RistrettoPoint {
+        self.shares_commitment.commitment[0]
+    }
 }
 
 pub struct KeyGenDKGCommitment {
     pub index: u32,
     pub shares_commitment: SharesCommitment,
-    pub zkp: Signature,
-    pub secret_commitment: RistrettoPoint,
 }
 
 #[derive(Copy, Clone)]
@@ -42,9 +45,9 @@ pub struct SigningCommitment {
 
 impl SigningCommitment {
     pub fn new(
+        index: u32,
         d: RistrettoPoint,
         e: RistrettoPoint,
-        index: u32,
     ) -> Result<SigningCommitment, &'static str> {
         if d == RistrettoPoint::identity() || e == RistrettoPoint::identity() {
             return Err("Invalid signing commitment");
