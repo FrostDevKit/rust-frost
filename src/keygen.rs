@@ -71,10 +71,10 @@ pub fn generate_dkg_challenge(
 ) -> Result<Scalar, &'static str> {
     let mut hasher = Sha256::new();
     // the order of the below may change to allow for EdDSA verification compatibility
-    hasher.update(index.to_string());
-    hasher.update("dkg");
-    hasher.update(public.compress().to_bytes());
     hasher.update(commitment.compress().to_bytes());
+    hasher.update(public.compress().to_bytes());
+    hasher.update(index.to_string());
+    hasher.update("dkg context");
     let result = hasher.finalize();
 
     let a: [u8; 32] = result

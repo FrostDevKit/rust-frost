@@ -80,7 +80,7 @@ pub fn sign(
 
     let my_rho_i = bindings[&keypair.index];
 
-    let c = gen_c(msg, group_commitment);
+    let c = generate_challenge(msg, group_commitment);
 
     let response = signing_nonce.d.secret
         + (signing_nonce.e.secret * my_rho_i)
@@ -138,7 +138,7 @@ pub fn aggregate(
     }
 
     let group_commitment = gen_group_commitment(&signing_commitments, &bindings)?;
-    let c = gen_c(msg, group_commitment);
+    let c = generate_challenge(msg, group_commitment);
 
     // check the validity of each participant's response
     for resp in signing_responses {
@@ -178,17 +178,17 @@ pub fn aggregate(
 
 /// validate instantiates a plain Schnorr validation operation
 pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
-    let challenge = gen_c(msg, sig.r);
+    let challenge = generate_challenge(msg, sig.r);
     match sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge) {
         true => Ok(()),
         false => Err("Signature is invalid"),
     }
 }
 
-pub fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
+pub fn generate_challenge(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
     let mut hasher = Sha256::new();
-    hasher.update(msg);
     hasher.update(group_commitment.compress().to_bytes());
+    hasher.update(msg);
     let result = hasher.finalize();
 
     let x = result
@@ -632,7 +632,7 @@ mod tests {
         let msg = "testing sign";
         let nonce = Scalar::from(5u32); // random nonce
         let commitment = &constants::RISTRETTO_BASEPOINT_TABLE * &nonce;
-        let c = gen_c(msg, commitment);
+        let c = generate_challenge(msg, commitment);
 
         let z = nonce + privkey * c;
 
@@ -651,7 +651,7 @@ mod tests {
         let msg = "testing sign";
         let nonce = Scalar::from(5u32); // random nonce
         let commitment = &constants::RISTRETTO_BASEPOINT_TABLE * &nonce;
-        let c = gen_c(msg, commitment);
+        let c = generate_challenge(msg, commitment);
 
         let invalid_nonce = Scalar::from(100u32); // random nonce
         let z = invalid_nonce + privkey * c;
