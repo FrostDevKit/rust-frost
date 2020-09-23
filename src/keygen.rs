@@ -3,9 +3,10 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 use rand::rngs::ThreadRng;
+use std::convert::TryInto;
 use std::u32;
 
-use sign::{gen_c, validate};
+use sha2::{Digest, Sha256};
 use types::*;
 
 /// keygen_with_dealer generates shares and distributes them via a trusted
@@ -49,9 +50,10 @@ pub fn keygen_begin(
 
     let r = Scalar::random(rng);
     let r_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &r;
+    let s_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &secret;
 
-    let c = gen_c("keygen begin", r_pub);
-    let z = r + secret * c;
+    let challenge = generate_dkg_challenge(generator_index, s_pub, r_pub)?;
+    let z = r + secret * challenge;
 
     let dkg_commitment = KeyGenDKGProposedCommitment {
         index: generator_index,
@@ -60,6 +62,27 @@ pub fn keygen_begin(
     };
 
     Ok((dkg_commitment, shares))
+}
+
+pub fn generate_dkg_challenge(
+    index: u32,
+    public: RistrettoPoint,
+    commitment: RistrettoPoint,
+) -> Result<Scalar, &'static str> {
+    let mut hasher = Sha256::new();
+    // the order of the below may change to allow for EdDSA verification compatibility
+    hasher.update(index.to_string());
+    hasher.update("dkg");
+    hasher.update(public.compress().to_bytes());
+    hasher.update(commitment.compress().to_bytes());
+    let result = hasher.finalize();
+
+    let a: [u8; 32] = result
+        .as_slice()
+        .try_into()
+        .expect("Error generating commitment!");
+
+    Ok(Scalar::from_bytes_mod_order(a))
 }
 
 /// keygen_receive_commitments_and_validate_peers gathers commitments from
@@ -73,19 +96,19 @@ pub fn keygen_begin(
 /// keygen_finalize
 pub fn keygen_receive_commitments_and_validate_peers(
     peer_commitments: Vec<KeyGenDKGProposedCommitment>,
-) -> (Vec<u32>, Vec<KeyGenDKGCommitment>) {
+) -> Result<(Vec<u32>, Vec<KeyGenDKGCommitment>), &'static str> {
     let mut invalid_peer_ids = Vec::new();
     let mut valid_peer_commitments: Vec<KeyGenDKGCommitment> =
         Vec::with_capacity(peer_commitments.len());
 
     for commitment in peer_commitments {
-        if !validate(
-            "keygen begin",
-            &commitment.zkp,
+        let challenge = generate_dkg_challenge(
+            commitment.index,
             commitment.get_commitment_to_secret(),
-        )
-        .is_ok()
-        {
+            commitment.zkp.r,
+        )?;
+
+        if !is_valid_zkp(challenge, &commitment).is_ok() {
             invalid_peer_ids.push(commitment.index);
         } else {
             valid_peer_commitments.push(KeyGenDKGCommitment {
@@ -95,7 +118,20 @@ pub fn keygen_receive_commitments_and_validate_peers(
         }
     }
 
-    (invalid_peer_ids, valid_peer_commitments)
+    Ok((invalid_peer_ids, valid_peer_commitments))
+}
+
+pub fn is_valid_zkp(
+    challenge: Scalar,
+    comm: &KeyGenDKGProposedCommitment,
+) -> Result<(), &'static str> {
+    match comm.zkp.r
+        == (&constants::RISTRETTO_BASEPOINT_TABLE * &comm.zkp.z)
+            - (comm.get_commitment_to_secret() * challenge)
+    {
+        true => Ok(()),
+        false => Err("Signature is invalid"),
+    }
 }
 
 /// keygen_finalize finalizes the distributed key generation protocol.
@@ -245,7 +281,7 @@ mod tests {
         }
 
         let (invalid_peer_ids, valid_commitments) =
-            keygen_receive_commitments_and_validate_peers(participant_commitments);
+            keygen_receive_commitments_and_validate_peers(participant_commitments).unwrap();
         assert!(invalid_peer_ids.len() == 0);
 
         // now, finalize the protocol
@@ -277,7 +313,7 @@ mod tests {
 
         // now, ensure that this participant is marked as invalid
         let (invalid_ids, valid_coms) =
-            keygen_receive_commitments_and_validate_peers(participant_commitments);
+            keygen_receive_commitments_and_validate_peers(participant_commitments).unwrap();
         assert!(invalid_ids.len() == 1);
         assert!(invalid_ids[0] == invalid_participant_id);
         assert!(valid_coms.len() == ((num_shares - 1) as usize));

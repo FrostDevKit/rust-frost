@@ -178,9 +178,8 @@ pub fn aggregate(
 
 /// validate instantiates a plain Schnorr validation operation
 pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
-    let c = gen_c(msg, sig.r);
-
-    match sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * c) {
+    let challenge = gen_c(msg, sig.r);
+    match sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge) {
         true => Ok(()),
         false => Err("Signature is invalid"),
     }
@@ -191,7 +190,12 @@ pub fn gen_c(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
     hasher.update(msg);
     hasher.update(group_commitment.compress().to_bytes());
     let result = hasher.finalize();
-    Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
+
+    let x = result
+        .as_slice()
+        .try_into()
+        .expect("Error generating commitment!");
+    Scalar::from_bytes_mod_order(x)
 }
 
 fn get_lagrange_coeff(
@@ -217,10 +221,6 @@ fn get_lagrange_coeff(
     Ok(lagrange_coeff)
 }
 
-fn slice_to_array_helper(s: &[u8]) -> [u8; 32] {
-    s.try_into().expect("slice with incorrect length")
-}
-
 fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>) -> Scalar {
     let mut hasher = Sha256::new();
     hasher.update("I".as_bytes());
@@ -233,7 +233,11 @@ fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>
     }
     let result = hasher.finalize();
 
-    Scalar::from_bytes_mod_order(slice_to_array_helper(result.as_slice()))
+    let x = result
+        .as_slice()
+        .try_into()
+        .expect("Error generating commitment!");
+    Scalar::from_bytes_mod_order(x)
 }
 
 fn gen_group_commitment(
@@ -338,7 +342,7 @@ mod tests {
         }
 
         let (invalid_peer_ids, valid_commitments) =
-            keygen_receive_commitments_and_validate_peers(participant_commitments);
+            keygen_receive_commitments_and_validate_peers(participant_commitments).unwrap();
         assert!(invalid_peer_ids.len() == 0);
 
         // now, finalize the protocol
