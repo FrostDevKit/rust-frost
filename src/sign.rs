@@ -282,16 +282,16 @@ mod tests {
     }
 
     fn gen_signing_helper(
-        threshold: u32,
+        num_signers: u32,
         keypairs: &Vec<KeyPair>,
         rng: &mut ThreadRng,
     ) -> (Vec<SigningCommitment>, HashMap<u32, Vec<NoncePair>>) {
-        let mut nonces: HashMap<u32, Vec<NoncePair>> = HashMap::with_capacity(threshold as usize);
+        let mut nonces: HashMap<u32, Vec<NoncePair>> = HashMap::with_capacity(num_signers as usize);
         let mut signing_commitments: Vec<SigningCommitment> =
-            Vec::with_capacity(threshold as usize);
+            Vec::with_capacity(num_signers as usize);
         let number_nonces_to_generate = 1;
 
-        for counter in 0..threshold {
+        for counter in 0..num_signers {
             let signing_keypair = &keypairs[counter as usize];
             let (participant_commitments, participant_nonces) =
                 preprocess(number_nonces_to_generate, signing_keypair.index, rng).unwrap();
@@ -299,7 +299,7 @@ mod tests {
             signing_commitments.push(participant_commitments[0]);
             nonces.insert(counter, participant_nonces);
         }
-        assert!(nonces.len() == (threshold as usize));
+        assert!(nonces.len() == (num_signers as usize));
         (signing_commitments, nonces)
     }
 
@@ -397,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_sign_with_dkg() {
+    fn valid_sign_with_dkg_threshold_signers() {
         let num_signers = 5;
         let threshold = 3;
         let mut rng: ThreadRng = rand::thread_rng();
@@ -410,6 +410,41 @@ mod tests {
         let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(threshold as usize);
 
         for counter in 0..threshold {
+            let mut my_signing_nonces = signing_nonces[&counter].clone();
+            assert!(my_signing_nonces.len() == 1);
+            let res = sign(
+                &keypairs[counter as usize],
+                &signing_package,
+                &mut my_signing_nonces,
+                msg,
+            )
+            .unwrap();
+
+            all_responses.push(res);
+        }
+
+        let signer_pubkeys = get_signer_pubkeys(&keypairs);
+        let group_sig = aggregate(msg, &signing_package, &all_responses, &signer_pubkeys).unwrap();
+        let group_pubkey = keypairs[1].group_public;
+        assert!(validate(msg, &group_sig, group_pubkey).is_ok());
+    }
+
+    #[test]
+    fn valid_sign_with_dkg_larger_than_threshold_signers() {
+        let num_signers = 5;
+        let threshold = 3;
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let keypairs = gen_keypairs_dkg_helper(num_signers, threshold);
+
+        let msg = "testing sign";
+        let number_signers = threshold + 1;
+        let (signing_package, signing_nonces) =
+            gen_signing_helper(number_signers, &keypairs, &mut rng);
+
+        let mut all_responses: Vec<SigningResponse> = Vec::with_capacity(number_signers as usize);
+
+        for counter in 0..number_signers {
             let mut my_signing_nonces = signing_nonces[&counter].clone();
             assert!(my_signing_nonces.len() == 1);
             let res = sign(
