@@ -329,6 +329,7 @@ mod tests {
     use crate::sign::*;
     use rand::rngs::ThreadRng;
     use std::collections::HashMap;
+    use std::time::SystemTime;
 
     #[test]
     fn preprocess_generates_values() {
@@ -391,10 +392,14 @@ mod tests {
             Vec::with_capacity(num_shares as usize);
         let mut participant_keypairs: Vec<KeyPair> = Vec::with_capacity(num_shares as usize);
 
+        // use some unpredictable string that everyone can derive, to protect
+        // against replay attacks.
+        let context = format!("{:?}", SystemTime::now());
+
         for counter in 0..num_shares {
             let participant_index = counter + 1;
             let (com, shares) =
-                keygen_begin(num_shares, threshold, participant_index, &mut rng).unwrap();
+                keygen_begin(num_shares, threshold, participant_index, &context, &mut rng).unwrap();
 
             for share in shares {
                 match participant_shares.get_mut(&share.receiver_index) {
@@ -410,7 +415,8 @@ mod tests {
         }
 
         let (invalid_peer_ids, valid_commitments) =
-            keygen_receive_commitments_and_validate_peers(participant_commitments).unwrap();
+            keygen_receive_commitments_and_validate_peers(participant_commitments, &context)
+                .unwrap();
         assert!(invalid_peer_ids.len() == 0);
 
         // now, finalize the protocol

@@ -4,4 +4,3 @@ extern crate sha2;
 
 pub mod keygen;
 pub mod sign;
-pub mod types;

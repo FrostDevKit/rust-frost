@@ -78,6 +78,7 @@ pub fn keygen_begin(
     numshares: u32,
     threshold: u32,
     generator_index: u32,
+    context: &str,
     rng: &mut ThreadRng,
 ) -> Result<(KeyGenDKGProposedCommitment, Vec<Share>), &'static str> {
     let secret = Scalar::random(rng);
@@ -87,7 +88,7 @@ pub fn keygen_begin(
     let r_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &r;
     let s_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &secret;
 
-    let challenge = generate_dkg_challenge(generator_index, s_pub, r_pub)?;
+    let challenge = generate_dkg_challenge(generator_index, context, s_pub, r_pub)?;
     let z = r + secret * challenge;
 
     let dkg_commitment = KeyGenDKGProposedCommitment {
@@ -101,6 +102,7 @@ pub fn keygen_begin(
 
 pub fn generate_dkg_challenge(
     index: u32,
+    context: &str,
     public: RistrettoPoint,
     commitment: RistrettoPoint,
 ) -> Result<Scalar, &'static str> {
@@ -109,7 +111,7 @@ pub fn generate_dkg_challenge(
     hasher.update(commitment.compress().to_bytes());
     hasher.update(public.compress().to_bytes());
     hasher.update(index.to_string());
-    hasher.update("dkg context");
+    hasher.update(context);
     let result = hasher.finalize();
 
     let a: [u8; 32] = result
@@ -131,6 +133,7 @@ pub fn generate_dkg_challenge(
 /// keygen_finalize
 pub fn keygen_receive_commitments_and_validate_peers(
     peer_commitments: Vec<KeyGenDKGProposedCommitment>,
+    context: &str,
 ) -> Result<(Vec<u32>, Vec<KeyGenDKGCommitment>), &'static str> {
     let mut invalid_peer_ids = Vec::new();
     let mut valid_peer_commitments: Vec<KeyGenDKGCommitment> =
@@ -139,6 +142,7 @@ pub fn keygen_receive_commitments_and_validate_peers(
     for commitment in peer_commitments {
         let challenge = generate_dkg_challenge(
             commitment.index,
+            context,
             commitment.get_commitment_to_secret(),
             commitment.zkp.r,
         )?;
@@ -284,6 +288,7 @@ fn verify_share(share: &Share, com: &SharesCommitment) -> Result<(), &'static st
 mod tests {
     use crate::keygen::*;
     use std::collections::HashMap;
+    use std::time::SystemTime;
 
     #[test]
     fn keygen_with_dkg_simple() {
@@ -297,9 +302,13 @@ mod tests {
         let mut participant_commitments: Vec<KeyGenDKGProposedCommitment> =
             Vec::with_capacity(num_shares as usize);
 
+        // use some unpredictable string that everyone can derive, to protect
+        // against replay attacks.
+        let context = format!("{:?}", SystemTime::now());
+
         for index in 1..num_shares + 1 {
             let (shares_com, shares) =
-                keygen_begin(num_shares, threshold, index, &mut rng).unwrap();
+                keygen_begin(num_shares, threshold, index, &context, &mut rng).unwrap();
             assert!(shares.len() == (num_shares as usize));
 
             for share in shares {
@@ -316,7 +325,8 @@ mod tests {
         }
 
         let (invalid_peer_ids, valid_commitments) =
-            keygen_receive_commitments_and_validate_peers(participant_commitments).unwrap();
+            keygen_receive_commitments_and_validate_peers(participant_commitments, &context)
+                .unwrap();
         assert!(invalid_peer_ids.len() == 0);
 
         // now, finalize the protocol
@@ -336,8 +346,12 @@ mod tests {
         let mut participant_commitments: Vec<KeyGenDKGProposedCommitment> =
             Vec::with_capacity(num_shares as usize);
 
+        // use some unpredictable string that everyone can derive, to protect
+        // against replay attacks.
+        let context = format!("{:?}", SystemTime::now());
+
         for index in 1..num_shares + 1 {
-            let (com, _) = keygen_begin(num_shares, threshold, index, &mut rng).unwrap();
+            let (com, _) = keygen_begin(num_shares, threshold, index, &context, &mut rng).unwrap();
 
             participant_commitments.push(com);
         }
@@ -348,7 +362,8 @@ mod tests {
 
         // now, ensure that this participant is marked as invalid
         let (invalid_ids, valid_coms) =
-            keygen_receive_commitments_and_validate_peers(participant_commitments).unwrap();
+            keygen_receive_commitments_and_validate_peers(participant_commitments, &context)
+                .unwrap();
         assert!(invalid_ids.len() == 1);
         assert!(invalid_ids[0] == invalid_participant_id);
         assert!(valid_coms.len() == ((num_shares - 1) as usize));
