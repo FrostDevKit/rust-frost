@@ -7,7 +7,42 @@ use std::convert::TryInto;
 use std::u32;
 
 use sha2::{Digest, Sha256};
-use types::*;
+use sign::Signature;
+
+pub struct SharesCommitment {
+    commitment: Vec<RistrettoPoint>,
+}
+
+pub struct KeyGenDKGProposedCommitment {
+    index: u32,
+    shares_commitment: SharesCommitment,
+    zkp: Signature,
+}
+
+impl KeyGenDKGProposedCommitment {
+    pub fn get_commitment_to_secret(&self) -> RistrettoPoint {
+        self.shares_commitment.commitment[0]
+    }
+}
+
+pub struct KeyGenDKGCommitment {
+    pub index: u32,
+    pub shares_commitment: SharesCommitment,
+}
+
+#[derive(Copy, Clone)]
+pub struct Share {
+    generator_index: u32,
+    pub receiver_index: u32,
+    value: Scalar,
+}
+
+pub struct KeyPair {
+    pub index: u32,
+    pub secret: Scalar,
+    pub public: RistrettoPoint,
+    pub group_public: RistrettoPoint,
+}
 
 /// keygen_with_dealer generates shares and distributes them via a trusted
 /// dealer. Note this approach is not the FROST specified key generation

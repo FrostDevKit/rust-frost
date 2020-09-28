@@ -2,11 +2,92 @@ use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
+use keygen::KeyPair;
 use rand::rngs::ThreadRng;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::convert::TryInto;
-use types::*;
+
+#[derive(Copy, Clone)]
+pub struct SigningResponse {
+    pub response: Scalar,
+    pub index: u32,
+}
+
+impl SigningResponse {
+    pub fn is_valid(
+        &self,
+        pubkey: &RistrettoPoint,
+        lambda_i: Scalar,
+        commitment: &RistrettoPoint,
+        challenge: Scalar,
+    ) -> bool {
+        (&constants::RISTRETTO_BASEPOINT_TABLE * &self.response)
+            == (commitment + (pubkey * (challenge * lambda_i)))
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct SigningCommitment {
+    pub index: u32,
+    d: RistrettoPoint,
+    e: RistrettoPoint,
+}
+
+impl SigningCommitment {
+    pub fn new(
+        index: u32,
+        d: RistrettoPoint,
+        e: RistrettoPoint,
+    ) -> Result<SigningCommitment, &'static str> {
+        if d == RistrettoPoint::identity() || e == RistrettoPoint::identity() {
+            return Err("Invalid signing commitment");
+        }
+
+        Ok(SigningCommitment { d, e, index })
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct NoncePair {
+    d: Nonce,
+    e: Nonce,
+}
+
+impl NoncePair {
+    pub fn new(rng: &mut ThreadRng) -> Result<NoncePair, &'static str> {
+        let d = Scalar::random(rng);
+        let e = Scalar::random(rng);
+        let d_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &d;
+        let e_pub = &constants::RISTRETTO_BASEPOINT_TABLE * &e;
+
+        if d_pub == RistrettoPoint::identity() || e_pub == RistrettoPoint::identity() {
+            return Err("Invalid nonce commitment");
+        }
+
+        Ok(NoncePair {
+            d: Nonce {
+                secret: d,
+                public: d_pub,
+            },
+            e: Nonce {
+                secret: e,
+                public: e_pub,
+            },
+        })
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct Nonce {
+    secret: Scalar,
+    pub public: RistrettoPoint,
+}
+
+pub struct Signature {
+    pub r: RistrettoPoint,
+    pub z: Scalar,
+}
 
 /// preprocess is performed by each participant; their commitments are published
 /// and stored in an external location for later use in signing, while their
@@ -127,7 +208,7 @@ pub fn aggregate(
     }
 
     let group_commitment = gen_group_commitment(&signing_commitments, &bindings)?;
-    let c = generate_challenge(msg, group_commitment);
+    let challenge = generate_challenge(msg, group_commitment);
 
     // check the validity of each participant's response
     for resp in signing_responses {
@@ -142,15 +223,12 @@ pub fn aggregate(
             .find(|x| x.index == resp.index)
             .ok_or("No matching commitment for response")?;
 
-        let comm_i = matching_commitment.d + (matching_commitment.e * matching_rho_i);
+        let commitment_i = matching_commitment.d + (matching_commitment.e * matching_rho_i);
         let signer_pubkey = signer_pubkeys
             .get(&matching_commitment.index)
             .ok_or("commitment does not have a matching signer public key!")?;
 
-        let is_valid = (&constants::RISTRETTO_BASEPOINT_TABLE * &resp.response)
-            == (comm_i + (signer_pubkey * (c * lambda_i)));
-
-        if !is_valid {
+        if !resp.is_valid(&signer_pubkey, lambda_i, &commitment_i, challenge) {
             return Err("Invalid signer response");
         }
     }
