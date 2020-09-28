@@ -61,7 +61,6 @@ impl SigningCommitment {
 pub struct NoncePair {
     pub d: Nonce,
     pub e: Nonce,
-    pub dirty: bool,
 }
 
 impl NoncePair {
@@ -84,12 +83,7 @@ impl NoncePair {
                 secret: e,
                 public: e_pub,
             },
-            dirty: false,
         })
-    }
-
-    pub fn mark_as_used(&mut self) {
-        self.dirty = true;
     }
 }
 

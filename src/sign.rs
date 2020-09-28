@@ -56,27 +56,19 @@ pub fn sign(
     let lambda_i = get_lagrange_coeff(keypair.index, &indices)?;
 
     // find the corresponding nonces for this participant
-    let my_comm = match signing_commitments
+    let my_comm = signing_commitments
         .iter()
         .find(|item| item.index == keypair.index)
-    {
-        Some(v) => v,
-        None => return Err("No signing commitment for signer"),
-    };
+        .ok_or("No signing commitment for signer")?;
 
-    let signing_nonce = match signing_nonces
+    let signing_nonce_position = signing_nonces
         .iter_mut()
-        .find(|item| item.d.public == my_comm.d && item.e.public == my_comm.e)
-    {
-        Some(v) => v,
-        None => return Err("No matching signing nonce for signer"),
-    };
+        .position(|item| item.d.public == my_comm.d && item.e.public == my_comm.e)
+        .ok_or("No matching signing nonce for signer")?;
 
-    // now mark the nonce as having been used, return an error if it is already used
-    match signing_nonce.dirty {
-        false => signing_nonce.mark_as_used(),
-        true => return Err("signing nonce has already been used!"),
-    }
+    let signing_nonce = signing_nonces
+        .get(signing_nonce_position)
+        .ok_or("cannot retrieve nonce from position~")?;
 
     let my_rho_i = bindings[&keypair.index];
 
@@ -85,6 +77,9 @@ pub fn sign(
     let response = signing_nonce.d.secret
         + (signing_nonce.e.secret * my_rho_i)
         + (lambda_i * keypair.secret * c);
+
+    // Now that this nonce has been used, delete it
+    signing_nonces.remove(signing_nonce_position);
 
     Ok(SigningResponse {
         response: response,
@@ -120,13 +115,12 @@ pub fn aggregate(
     commitment_indices.sort();
     response_indices.sort();
 
-    match commitment_indices
+    if !commitment_indices
         .iter()
         .zip(response_indices)
         .all(|(a, b)| *a == b)
     {
-        true => (),
-        false => return Err("Mismatched commitment without corresponding response"),
+        return Err("Mismatched commitment without corresponding response");
     }
 
     let mut bindings: HashMap<u32, Scalar> = HashMap::with_capacity(signing_commitments.len());
@@ -148,16 +142,16 @@ pub fn aggregate(
 
         let lambda_i = get_lagrange_coeff(resp.index, &indices)?;
 
-        let matching_commitment = match signing_commitments.iter().find(|x| x.index == resp.index) {
-            Some(x) => x,
-            None => return Err("No matching commitment for response"),
-        };
+        let matching_commitment = signing_commitments
+            .iter()
+            .find(|x| x.index == resp.index)
+            .ok_or("No matching commitment for response")?;
 
         let comm_i = matching_commitment.d + (matching_commitment.e * matching_rho_i);
-        let signer_pubkey = match signer_pubkeys.get(&matching_commitment.index) {
-            Some(x) => x,
-            None => return Err("commitment does not have a matching signer public key!"),
-        };
+        let signer_pubkey = signer_pubkeys
+            .get(&matching_commitment.index)
+            .ok_or("commitment does not have a matching signer public key!")?;
+
         let is_valid = (&constants::RISTRETTO_BASEPOINT_TABLE * &resp.response)
             == (comm_i + (signer_pubkey * (c * lambda_i)));
 
@@ -179,10 +173,11 @@ pub fn aggregate(
 /// validate instantiates a plain Schnorr validation operation
 pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
     let challenge = generate_challenge(msg, sig.r);
-    match sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge) {
-        true => Ok(()),
-        false => Err("Signature is invalid"),
+    if !(sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge)) {
+        return Err("Signature is invalid");
     }
+
+    Ok(())
 }
 
 pub fn generate_challenge(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
@@ -602,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_sign_dirty_nonce_with_dkg() {
+    fn invalid_sign_used_nonce_with_dkg() {
         let num_signers = 5;
         let threshold = 3;
         let mut rng: ThreadRng = rand::thread_rng();
@@ -614,8 +609,7 @@ mod tests {
 
         let mut my_signing_nonces = signing_nonces[&0].clone();
 
-        // set the signing nonce for the first signer to already having been used
-        my_signing_nonces[0].mark_as_used();
+        my_signing_nonces.remove(0);
 
         let res = sign(&keypairs[0], &signing_package, &mut my_signing_nonces, msg);
 
