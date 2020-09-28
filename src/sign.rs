@@ -98,6 +98,9 @@ pub fn aggregate(
     signing_responses: &Vec<SigningResponse>,
     signer_pubkeys: &HashMap<u32, RistrettoPoint>,
 ) -> Result<Signature, &'static str> {
+    if signing_commitments.len() != signing_responses.len() {
+        return Err("Mismatched number of commitments and responses");
+    }
     // first, make sure that each commitment corresponds to exactly one response
     let mut commitment_indices = signing_commitments
         .iter()
@@ -108,18 +111,10 @@ pub fn aggregate(
         .map(|com| com.index)
         .collect::<Vec<u32>>();
 
-    if commitment_indices.len() != response_indices.len() {
-        return Err("Mismatched number of commitments and responses");
-    }
-
     commitment_indices.sort();
     response_indices.sort();
 
-    if !commitment_indices
-        .iter()
-        .zip(response_indices)
-        .all(|(a, b)| *a == b)
-    {
+    if commitment_indices != response_indices {
         return Err("Mismatched commitment without corresponding response");
     }
 
@@ -173,7 +168,7 @@ pub fn aggregate(
 /// validate instantiates a plain Schnorr validation operation
 pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
     let challenge = generate_challenge(msg, sig.r);
-    if !(sig.r == (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge)) {
+    if sig.r != (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge) {
         return Err("Signature is invalid");
     }
 

@@ -125,9 +125,9 @@ pub fn is_valid_zkp(
     challenge: Scalar,
     comm: &KeyGenDKGProposedCommitment,
 ) -> Result<(), &'static str> {
-    if !(comm.zkp.r
-        == (&constants::RISTRETTO_BASEPOINT_TABLE * &comm.zkp.z)
-            - (comm.get_commitment_to_secret() * challenge))
+    if comm.zkp.r
+        != (&constants::RISTRETTO_BASEPOINT_TABLE * &comm.zkp.z)
+            - (comm.get_commitment_to_secret() * challenge)
     {
         return Err("Signature is invalid");
     }
