@@ -125,13 +125,14 @@ pub fn is_valid_zkp(
     challenge: Scalar,
     comm: &KeyGenDKGProposedCommitment,
 ) -> Result<(), &'static str> {
-    match comm.zkp.r
+    if !(comm.zkp.r
         == (&constants::RISTRETTO_BASEPOINT_TABLE * &comm.zkp.z)
-            - (comm.get_commitment_to_secret() * challenge)
+            - (comm.get_commitment_to_secret() * challenge))
     {
-        true => Ok(()),
-        false => Err("Signature is invalid"),
+        return Err("Signature is invalid");
     }
+
+    Ok(())
 }
 
 /// keygen_finalize finalizes the distributed key generation protocol.
@@ -143,13 +144,11 @@ pub fn keygen_finalize(
 ) -> Result<KeyPair, &'static str> {
     // first, verify the integrity of the shares
     for share in shares {
-        let commitment = match commitments
+        let commitment = commitments
             .iter()
             .find(|comm| comm.index == share.generator_index)
-        {
-            Some(x) => x,
-            None => return Err("Received share with no corresponding commitment"),
-        };
+            .ok_or("Received share with no corresponding commitment")?;
+
         verify_share(share, &commitment.shares_commitment)?;
     }
 
@@ -239,10 +238,11 @@ fn verify_share(share: &Share, com: &SharesCommitment) -> Result<(), &'static st
         |(x_to_the_i, sum_so_far), comm_i| (x_to_the_i * x, sum_so_far + x_to_the_i * comm_i),
     );
 
-    match f_result == result {
-        true => Ok(()),
-        false => Err("Share is invalid."),
+    if !(f_result == result) {
+        return Err("Share is invalid.");
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
