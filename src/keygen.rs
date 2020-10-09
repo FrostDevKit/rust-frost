@@ -74,6 +74,13 @@ pub fn keygen_with_dealer(
 ///
 /// This function assumes there is an additional layer which performs the
 /// distribution of shares to their intended participants.
+///
+/// Note that while keygen_begin returns Shares, these shares should be sent
+/// *after* participants have exchanged commitments via
+/// keygen_receive_commitments_and_validate_peers. So, the caller of
+/// keygen_begin should store shares until after
+/// keygen_receive_commitments_and_validate_peers is complete, and then
+/// exchange shares via keygen_finalize
 pub fn keygen_begin(
     numshares: u32,
     threshold: u32,
