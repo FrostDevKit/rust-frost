@@ -4,7 +4,7 @@ This implementation was part of the contribution for the following paper:
 
 Chelsea Komlo, Ian Goldberg.
 ["FROST: Flexible Round-Optimized Schnorr Threshold SIgnatures."](https://eprint.iacr.org/2020/852.pdf
-) Under submission.
+) Conference on Selected Areas in Cryptography, 2020.
 
 This library provides the ability for participants to perform key generation
 either via a trusted dealer or via a distributed key generation stage as
