@@ -54,6 +54,7 @@ pub fn keygen_with_dealer(
     rng: &mut ThreadRng,
 ) -> Result<(SharesCommitment, Vec<KeyPair>), &'static str> {
     let secret = Scalar::random(rng);
+    let group_public = &constants::RISTRETTO_BASEPOINT_TABLE * &secret;
     // set generator_index to 0 as we are generating shares with a dealer
     let (shares_com, shares) = generate_shares(secret, numshares, threshold, 0, rng)?;
 
@@ -62,7 +63,7 @@ pub fn keygen_with_dealer(
         .map(|share| KeyPair {
             secret: share.value,
             public: &constants::RISTRETTO_BASEPOINT_TABLE * &share.value,
-            group_public: shares_com.commitment[0],
+            group_public: group_public,
             index: share.receiver_index,
         })
         .collect();
