@@ -264,6 +264,9 @@ fn generate_shares(
             value += &coefficients[i as usize];
             value *= scalar_index;
         }
+        // The secret is the *constant* term in the polynomial used for
+        // secret sharing, this is typical in schemes that build upon Shamir
+        // Secret Sharing.
         value += secret;
         shares.push(Share {
             generator_index: generator_index,
@@ -278,12 +281,19 @@ fn generate_shares(
 fn verify_share(share: &Share, com: &SharesCommitment) -> Result<(), &'static str> {
     let f_result = &constants::RISTRETTO_BASEPOINT_TABLE * &share.value;
 
-    let x = Scalar::from(share.receiver_index);
+    let term = Scalar::from(share.receiver_index);
+    let mut result = RistrettoPoint::identity();
 
-    let (_, result) = com.commitment.iter().fold(
-        (Scalar::one(), RistrettoPoint::identity()),
-        |(x_to_the_i, sum_so_far), comm_i| (x_to_the_i * x, sum_so_far + x_to_the_i * comm_i),
-    );
+    // Thanks to isis lovecruft for their simplification to Horner's method;
+    // including it here for readability. Their implementation of FROST can
+    // be found here: github.com/isislovecruft/frost-dalek
+    for (index, comm_i) in com.commitment.iter().rev().enumerate() {
+        result += comm_i;
+
+        if index != com.commitment.len() - 1 {
+            result *= term;
+        }
+    }
 
     if !(f_result == result) {
         return Err("Share is invalid.");
