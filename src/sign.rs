@@ -243,7 +243,9 @@ pub fn aggregate(
     })
 }
 
-/// validate instantiates a plain Schnorr validation operation
+/// validate performs a plain Schnorr validation operation; this is identical
+/// to performing validation of a Schnorr signature that has been signed by a
+/// single party.
 pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<(), &'static str> {
     let challenge = generate_challenge(msg, sig.r);
     if sig.r != (&constants::RISTRETTO_BASEPOINT_TABLE * &sig.z) - (pubkey * challenge) {
@@ -253,6 +255,10 @@ pub fn validate(msg: &str, sig: &Signature, pubkey: RistrettoPoint) -> Result<()
     Ok(())
 }
 
+/// generates the challenge value H(m, R) used for both signing and verification.
+/// ed25519_ph hashes the message first, and derives the challenge as H(H(m), R),
+/// this would be a better optimization but incompatibility with other
+/// implementations may be undesirable.
 pub fn generate_challenge(msg: &str, group_commitment: RistrettoPoint) -> Scalar {
     let mut hasher = Sha256::new();
     hasher.update(group_commitment.compress().to_bytes());
@@ -266,6 +272,9 @@ pub fn generate_challenge(msg: &str, group_commitment: RistrettoPoint) -> Scalar
     Scalar::from_bytes_mod_order(x)
 }
 
+/// generates the langrange coefficient for the ith participant. This allows
+/// for performing Lagrange interpolation, which underpins threshold secret
+/// sharing schemes based on Shamir secret sharing.
 fn get_lagrange_coeff(
     signer_index: u32,
     all_signer_indices: &Vec<u32>,
