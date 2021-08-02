@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use sign::Signature;
 
 pub struct SharesCommitment {
-    commitment: Vec<RistrettoPoint>,
+    pub commitment: Vec<RistrettoPoint>,
 }
 
 pub struct KeyGenDKGProposedCommitment {
@@ -304,6 +304,7 @@ fn verify_share(share: &Share, com: &SharesCommitment) -> Result<(), &'static st
 
 #[cfg(test)]
 mod tests {
+    use crate::helpers::*;
     use crate::keygen::*;
     use std::collections::HashMap;
     use std::time::SystemTime;
@@ -352,6 +353,71 @@ mod tests {
             let res = keygen_finalize(index, &participant_shares[&index], &valid_commitments);
             assert!(res.is_ok());
         }
+    }
+
+    #[test]
+    fn valid_keypair_from_dkg() {
+        let mut rng: ThreadRng = rand::thread_rng();
+
+        let num_shares = 3;
+        let threshold = 2;
+
+        let mut participant_shares: HashMap<u32, Vec<Share>> =
+            HashMap::with_capacity(num_shares as usize);
+        let mut participant_commitments: Vec<KeyGenDKGProposedCommitment> =
+            Vec::with_capacity(num_shares as usize);
+
+        // use some unpredictable string that everyone can derive, to protect
+        // against replay attacks.
+        let context = format!("{:?}", SystemTime::now());
+
+        for index in 1..num_shares + 1 {
+            let (shares_com, shares) =
+                keygen_begin(num_shares, threshold, index, &context, &mut rng).unwrap();
+            assert!(shares.len() == (num_shares as usize));
+
+            for share in shares {
+                match participant_shares.get_mut(&share.receiver_index) {
+                    Some(list) => list.push(share),
+                    None => {
+                        let mut list = Vec::with_capacity(num_shares as usize);
+                        list.push(share);
+                        participant_shares.insert(share.receiver_index, list);
+                    }
+                }
+            }
+            participant_commitments.push(shares_com);
+        }
+
+        let (invalid_peer_ids, valid_commitments) =
+            keygen_receive_commitments_and_validate_peers(participant_commitments, &context)
+                .unwrap();
+        assert!(invalid_peer_ids.len() == 0);
+
+        // now, finalize the protocol
+        let mut final_keypairs: Vec<KeyPair> = Vec::with_capacity(num_shares as usize);
+        for index in 1..num_shares + 1 {
+            let res =
+                keygen_finalize(index, &participant_shares[&index], &valid_commitments).unwrap();
+
+            // test our helper function, first.
+            //let expected = get_ith_pubkey(index as u32, &valid_commitments);
+            //assert_eq!(expected, res.public);
+            final_keypairs.push(res);
+        }
+
+        // now ensure that we can reconstruct the secret, given all the secret keys
+        let indices = final_keypairs.iter().map(|keypair| keypair.index).collect();
+        let mut output = Scalar::zero();
+        for keypair in &final_keypairs {
+            let zero_coeff = get_lagrange_coeff(0, keypair.index, &indices).unwrap();
+            output += keypair.secret * zero_coeff;
+        }
+
+        let received_public = &constants::RISTRETTO_BASEPOINT_TABLE * &output;
+
+        // ensure that the secret terms interpolate to the correct public key
+        assert_eq!(received_public, final_keypairs[0].group_public);
     }
 
     #[test]

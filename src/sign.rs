@@ -2,6 +2,7 @@ use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
+use helpers::*;
 use keygen::KeyPair;
 use rand::rngs::ThreadRng;
 use sha2::{Digest, Sha256};
@@ -134,7 +135,7 @@ pub fn sign(
 
     let indices = signing_commitments.iter().map(|item| item.index).collect();
 
-    let lambda_i = get_lagrange_coeff(keypair.index, &indices)?;
+    let lambda_i = get_lagrange_coeff(0, keypair.index, &indices)?;
 
     // find the corresponding nonces for this participant
     let my_comm = signing_commitments
@@ -216,7 +217,7 @@ pub fn aggregate(
 
         let indices = signing_commitments.iter().map(|item| item.index).collect();
 
-        let lambda_i = get_lagrange_coeff(resp.index, &indices)?;
+        let lambda_i = get_lagrange_coeff(0, resp.index, &indices)?;
 
         let matching_commitment = signing_commitments
             .iter()
@@ -270,32 +271,6 @@ pub fn generate_challenge(msg: &str, group_commitment: RistrettoPoint) -> Scalar
         .try_into()
         .expect("Error generating commitment!");
     Scalar::from_bytes_mod_order(x)
-}
-
-/// generates the langrange coefficient for the ith participant. This allows
-/// for performing Lagrange interpolation, which underpins threshold secret
-/// sharing schemes based on Shamir secret sharing.
-fn get_lagrange_coeff(
-    signer_index: u32,
-    all_signer_indices: &Vec<u32>,
-) -> Result<Scalar, &'static str> {
-    let mut num = Scalar::one();
-    let mut den = Scalar::one();
-    for j in all_signer_indices {
-        if *j == signer_index {
-            continue;
-        }
-        num *= Scalar::from(*j);
-        den *= Scalar::from(*j) - Scalar::from(signer_index);
-    }
-
-    if den == Scalar::zero() {
-        return Err("Duplicate shares provided");
-    }
-
-    let lagrange_coeff = num * den.invert();
-
-    Ok(lagrange_coeff)
 }
 
 fn gen_rho_i(index: u32, msg: &str, signing_commitments: &Vec<SigningCommitment>) -> Scalar {
