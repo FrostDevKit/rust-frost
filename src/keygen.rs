@@ -401,8 +401,8 @@ mod tests {
                 keygen_finalize(index, &participant_shares[&index], &valid_commitments).unwrap();
 
             // test our helper function, first.
-            //let expected = get_ith_pubkey(index as u32, &valid_commitments);
-            //assert_eq!(expected, res.public);
+            let expected = get_ith_pubkey(index as u32, &valid_commitments);
+            assert_eq!(expected, res.public);
             final_keypairs.push(res);
         }
 
