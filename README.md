@@ -1,4 +1,4 @@
-# FROST
+# FROST (Study only)
 
 This implementation was part of the contribution for the following paper:
 
